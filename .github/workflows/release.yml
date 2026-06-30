@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Validate release tag
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build:cli
+      - name: Package CLI
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          mkdir -p release
+          cp dist/btunnel.cjs release/btunnel.cjs
+          cat > release/README.txt <<'EOF'
+          BetterTunnels CLI
+
+          Requires Node.js 24+.
+
+          Run:
+            node btunnel.cjs http 3100
+
+          Optional:
+            chmod +x btunnel.cjs
+            ./btunnel.cjs http 3100
+          EOF
+          (cd release && tar -czf "../btunnel-${tag}.tar.gz" .)
+          (cd release && zip -q -r "../btunnel-${tag}.zip" .)
+          sha256sum "btunnel-${tag}.tar.gz" "btunnel-${tag}.zip" > "btunnel-${tag}.sha256"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "${tag}" \
+            --title "BetterTunnels ${tag}" \
+            --notes "CLI release for ${tag}. Requires Node.js 24+." \
+            "btunnel-${tag}.tar.gz" \
+            "btunnel-${tag}.zip" \
+            "btunnel-${tag}.sha256"
