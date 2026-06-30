@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Account {
+  id                 String      @id @default(cuid())
+  email              String?     @unique
+  plan               AccountPlan @default(anonymous)
+  verificationBypass Boolean     @default(false)
+  ipVerification     Boolean     @default(false)
+  createdAt          DateTime    @default(now())
+  tunnels            Tunnel[]
+}
+
+model ClientSession {
+  id        String   @id @default(cuid())
+  accountId String?
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+  tunnels   Tunnel[]
+}
+
+model Tunnel {
+  id            String        @id @default(cuid())
+  accountId     String?
+  sessionId     String
+  subdomain     String        @unique
+  ownerServerId String?
+  targetHost    String
+  targetPort    Int
+  authenticated Boolean       @default(false)
+  status        TunnelStatus  @default(created)
+  createdAt     DateTime      @default(now())
+  expiresAt     DateTime
+  account       Account?      @relation(fields: [accountId], references: [id])
+  session       ClientSession @relation(fields: [sessionId], references: [id])
+  validations   VisitorValidation[]
+  usage         UsageCounter?
+
+  @@index([sessionId])
+  @@index([expiresAt])
+}
+
+model VisitorValidation {
+  id                   String   @id @default(cuid())
+  tunnelId             String
+  visitorIpHash         String
+  userAgentHash         String
+  validationCookieHash  String
+  validatedAt           DateTime @default(now())
+  expiresAt             DateTime
+  tunnel               Tunnel   @relation(fields: [tunnelId], references: [id])
+
+  @@index([tunnelId, visitorIpHash, userAgentHash])
+}
+
+model UsageCounter {
+  tunnelId      String   @id
+  requests      Int      @default(0)
+  bytesIn       BigInt   @default(0)
+  bytesOut      BigInt   @default(0)
+  updatedAt     DateTime @updatedAt
+  tunnel        Tunnel   @relation(fields: [tunnelId], references: [id])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  event     String
+  subjectId String?
+  data      Json?
+  createdAt DateTime @default(now())
+}
+
+enum TunnelStatus {
+  created
+  active
+  draining
+  disconnected
+  expired
+  closed
+}
+
+enum AccountPlan {
+  anonymous
+  free
+  paid
+  admin
+}

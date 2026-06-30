@@ -1,0 +1,11 @@
+node_modules/
+lib/
+.env
+prisma/migrations/
+src/.bsb/
+src/generated/
+*.log
+*.tgz
+bsb-tests.json
+.bp-bootstrap/
+.bp-sync-cache/

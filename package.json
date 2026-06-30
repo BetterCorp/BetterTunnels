@@ -1,0 +1,50 @@
+{
+  "name": "better-tunnels",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "(AGPL-3.0-only OR Commercial)",
+  "scripts": {
+    "build": "bsb-plugin-cli build",
+    "typecheck": "tsc -p tsconfig.json",
+    "dev": "bsb-plugin-cli dev",
+    "start": "bsb-plugin-cli start",
+    "cli": "tsx src/cli.ts",
+    "bp-codegen": "bp-codegen",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@betterportal/framework": "^10.0.0",
+    "@betterportal/plugin-bsb": "^10.0.0",
+    "@bsb/base": "^9.6.41",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "anyvali": "^1.0.6",
+    "dotenv": "^17.2.3",
+    "h3": "^2.0.1-rc.22",
+    "jsx-htmx": "^4.0.0-beta2",
+    "pg": "^8.22.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "prisma": "^7.8.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "bsb": {
+    "hooks": {
+      "afterSchemas": "bp-codegen",
+      "beforeCompile": "prisma:generate"
+    }
+  },
+  "betterportal": {
+    "routes": [
+      "src/plugins/service-betterportal-bettertunnels/bp-routes/"
+    ]
+  }
+}

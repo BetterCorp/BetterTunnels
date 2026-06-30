@@ -1,0 +1,104 @@
+services:
+  caddy:
+    image: bettertunnels-caddy:latest
+    environment:
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      APP_UPSTREAM: ${APP_UPSTREAM:-app}
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: udp
+        mode: host
+    volumes:
+      - type: bind
+        source: /opt/better-tunnels/app/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: stop-first
+        failure_action: rollback
+
+  app:
+    image: bettertunnels-app:latest
+    environment:
+      DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    volumes:
+      - bp-runtime:/home/bsb/bp
+    networks:
+      - public
+      - data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+        failure_action: rollback
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: bettertunnels
+      POSTGRES_PASSWORD: bettertunnels
+      POSTGRES_DB: bettertunnels
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bettertunnels -d bettertunnels"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - bettertunnels-postgres:/var/lib/postgresql
+    networks:
+      - data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      placement:
+        constraints:
+          - node.role == manager
+
+networks:
+  public:
+    driver: overlay
+    attachable: true
+  data:
+    driver: overlay
+    attachable: true
+
+volumes:
+  bettertunnels-postgres:
+    name: app_bettertunnels-postgres
+    external: true
+  caddy-data:
+    name: app_caddy-data
+    external: true
+  caddy-config:
+    name: app_caddy-config
+    external: true
+  bp-runtime:
+    name: app_bettertunnels-bp-runtime

@@ -1,0 +1,17 @@
+{
+  "nodejs": [
+    {
+      "id": "service-tunnel-web",
+      "name": "service-tunnel-web",
+      "basePath": "./",
+      "description": "Front-facing H3 tunnel service",
+      "tags": [
+        "service",
+        "h3",
+        "tunnel"
+      ],
+      "documentation": [],
+      "pluginPath": "src/plugins/service-tunnel-web/"
+    }
+  ]
+}

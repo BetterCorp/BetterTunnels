@@ -1,0 +1,40 @@
+{
+	email admin@betterportal.dev
+}
+
+http://tunnels.betterportal.dev, http://*.tunnels.betterportal.dev {
+	redir https://{host}{uri} permanent
+}
+
+connect.tunnels.betterportal.dev {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	reverse_proxy {$APP_UPSTREAM:app}:8081 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+
+		@not_found status 404
+		handle_response @not_found {
+			reverse_proxy {$APP_UPSTREAM:app}:8080 {
+				header_up X-Real-IP {remote_host}
+				header_up X-Forwarded-Proto {scheme}
+				header_up X-Forwarded-Host {host}
+			}
+		}
+	}
+}
+
+tunnels.betterportal.dev, *.tunnels.betterportal.dev {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	reverse_proxy {$APP_UPSTREAM:app}:8080 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}

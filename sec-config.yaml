@@ -1,0 +1,39 @@
+default:
+  observable:
+    observable-default:
+      plugin: observable-default
+      enabled: true
+      config: {}
+  events:
+    events-default:
+      plugin: events-default
+      enabled: true
+  services:
+    tunnel-web:
+      plugin: service-tunnel-web
+      package: better-tunnels
+      enabled: true
+      config:
+        port: 8080
+        domain: tunnels.betterportal.dev
+        verificationHost: verify.tunnels.betterportal.dev
+        cookieSecret: dev-cookie-secret
+        turnstileSiteKey: ""
+        turnstileSecretKey: ""
+    tunnel-client-api:
+      plugin: service-tunnel-client-api
+      package: better-tunnels
+      enabled: true
+      config:
+        port: 8081
+        domain: tunnels.betterportal.dev
+        publicUrl: https://tunnels.betterportal.dev
+    tunnel-betterportal:
+      plugin: service-betterportal-bettertunnels
+      package: better-tunnels
+      enabled: false
+      config:
+        port: 8082
+        betterportal:
+          bootstrapStatePath: /home/bsb/bp/bootstrap/state.enc
+          scopedConfigCachePath: /home/bsb/bp/sync-cache/scoped.json

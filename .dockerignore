@@ -1,0 +1,11 @@
+node_modules/
+lib/
+src/generated/prisma/
+.env
+.git/
+.bsb/
+bsb-tests.json
+npm-debug.log*
+Dockerfile
+docker-compose.yml
+tests/

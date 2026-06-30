@@ -1,0 +1,44 @@
+import * as av from "anyvali";
+import type { Infer } from "anyvali";
+
+export const TunnelCreateSchema = av.object({
+  sessionId: av.string().minLength(1),
+  targetHost: av.string().minLength(1).default("127.0.0.1"),
+  targetPort: av.number(),
+  authenticated: av.bool().default(false),
+  prefix: av.optional(av.string())
+}, { unknownKeys: "strip" });
+export type TunnelCreateInput = Infer<typeof TunnelCreateSchema>;
+
+export const ClientFrameSchema = av.object({
+  type: av.string().minLength(1),
+  code: av.optional(av.number()),
+  requestId: av.optional(av.string()),
+  status: av.optional(av.number()),
+  headers: av.optional(av.record(av.string())),
+  body: av.optional(av.string()),
+  message: av.optional(av.string()),
+  publicServerId: av.optional(av.string()),
+  publicSocketId: av.optional(av.string()),
+  frameType: av.optional(av.string()),
+  path: av.optional(av.string()),
+  webStartedAt: av.optional(av.number()),
+  clientApiRoundtripMs: av.optional(av.number()),
+  cliOverheadMs: av.optional(av.number()),
+  originMs: av.optional(av.number()),
+  totalMs: av.optional(av.number()),
+  internalServerMs: av.optional(av.number())
+}, { unknownKeys: "strip" });
+
+export const TunnelConfigSchema = av.object({
+  host: av.string().minLength(1).default("127.0.0.1"),
+  port: av.number(),
+  prefix: av.optional(av.string()),
+  host_header: av.optional(av.string())
+}, { unknownKeys: "strip" });
+export type TunnelConfig = Infer<typeof TunnelConfigSchema>;
+
+export const FileConfigSchema = av.object({
+  tunnels: av.array(TunnelConfigSchema).default([])
+}, { unknownKeys: "strip" });
+export type FileConfig = Infer<typeof FileConfigSchema>;
