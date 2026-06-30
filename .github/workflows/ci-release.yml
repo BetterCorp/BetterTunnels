@@ -1,0 +1,82 @@
+name: CI and Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build:cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: btunnel-cli
+          path: dist/btunnel.cjs
+
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate release tag
+        run: |
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build:cli
+      - name: Package CLI
+        run: |
+          mkdir -p release
+          cp dist/btunnel.cjs release/btunnel.cjs
+          cat > release/README.txt <<'EOF'
+          BetterTunnels CLI
+
+          Requires Node.js 24+.
+
+          Run:
+            node btunnel.cjs http 3100
+
+          Optional:
+            chmod +x btunnel.cjs
+            ./btunnel.cjs http 3100
+          EOF
+          (cd release && tar -czf "../btunnel-${GITHUB_REF_NAME}.tar.gz" .)
+          (cd release && zip -q -r "../btunnel-${GITHUB_REF_NAME}.zip" .)
+          sha256sum "btunnel-${GITHUB_REF_NAME}.tar.gz" "btunnel-${GITHUB_REF_NAME}.zip" > "btunnel-${GITHUB_REF_NAME}.sha256"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "BetterTunnels ${GITHUB_REF_NAME}" \
+            --notes "CLI release for ${GITHUB_REF_NAME}. Requires Node.js 24+." \
+            "btunnel-${GITHUB_REF_NAME}.tar.gz" \
+            "btunnel-${GITHUB_REF_NAME}.zip" \
+            "btunnel-${GITHUB_REF_NAME}.sha256"

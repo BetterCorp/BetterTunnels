@@ -1,5 +1,6 @@
 node_modules/
 lib/
+dist/
 .env
 prisma/migrations/
 src/.bsb/

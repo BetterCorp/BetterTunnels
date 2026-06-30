@@ -13,28 +13,35 @@ const sessionId = randomUUID();
 
 const [, , command, target, ...args] = process.argv;
 
-if (command === "http" && target) {
-  const port = Number(target.includes(":") ? target.split(":").at(-1) : target);
-  const host = target.includes(":") ? target.split(":").slice(0, -1).join(":") : "127.0.0.1";
-  await startTunnel(TunnelConfigSchema.parse({ host, port }));
-} else if (command === "up") {
-  const cfg = FileConfigSchema.parse(JSON.parse(await readFile(".bettertunnel.json", "utf8")));
-  await Promise.all(cfg.tunnels.map((tunnel) => startTunnel(tunnel)));
-} else if (command === "host" && target === "--dev") {
-  const port = Number(args.shift());
-  if (!port || args.length === 0) throw new Error("usage: btunnel host --dev <port> <command...>");
-  const child = spawn(args.join(" "), [], { shell: true, stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
-  await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
-} else if (command === "host" && target) {
-  const port = Number(args[0] ?? "4173");
-  await serveStatic(target, port);
-  await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
-} else {
-  console.log("usage: btunnel http <port|host:port>");
-  console.log("       btunnel host <dir> [port]");
-  console.log("       btunnel host --dev <port> <command...>");
-  console.log("       btunnel up");
+void main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+
+async function main(): Promise<void> {
+  if (command === "http" && target) {
+    const port = Number(target.includes(":") ? target.split(":").at(-1) : target);
+    const host = target.includes(":") ? target.split(":").slice(0, -1).join(":") : "127.0.0.1";
+    await startTunnel(TunnelConfigSchema.parse({ host, port }));
+  } else if (command === "up") {
+    const cfg = FileConfigSchema.parse(JSON.parse(await readFile(".bettertunnel.json", "utf8")));
+    await Promise.all(cfg.tunnels.map((tunnel) => startTunnel(tunnel)));
+  } else if (command === "host" && target === "--dev") {
+    const port = Number(args.shift());
+    if (!port || args.length === 0) throw new Error("usage: btunnel host --dev <port> <command...>");
+    const child = spawn(args.join(" "), [], { shell: true, stdio: "inherit" });
+    child.on("exit", (code) => process.exit(code ?? 0));
+    await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
+  } else if (command === "host" && target) {
+    const port = Number(args[0] ?? "4173");
+    await serveStatic(target, port);
+    await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
+  } else {
+    console.log("usage: btunnel http <port|host:port>");
+    console.log("       btunnel host <dir> [port]");
+    console.log("       btunnel host --dev <port> <command...>");
+    console.log("       btunnel up");
+  }
 }
 
 async function startTunnel(config: { host: string; port: number; prefix?: string; host_header?: string }): Promise<void> {
