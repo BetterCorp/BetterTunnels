@@ -85,11 +85,11 @@ services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_USER: bettertunnels
-      POSTGRES_PASSWORD: bettertunnels
-      POSTGRES_DB: bettertunnels
+      POSTGRES_USER: ${POSTGRES_USER:-bettertunnels}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-bettertunnels}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bettertunnels -d bettertunnels"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 20
