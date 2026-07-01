@@ -1,9 +1,18 @@
 {
-  "name": "better-tunnels",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@betterportal/tunnels",
+  "version": "1.0.0",
   "type": "module",
   "license": "(AGPL-3.0-only OR Commercial)",
+  "files": [
+    "lib/",
+    "prisma/",
+    "README.md",
+    "SPEC.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "bsb-plugin-cli build",
     "typecheck": "tsc -p tsconfig.json",

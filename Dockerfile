@@ -31,13 +31,13 @@ ENV BSB_CONFIG_FILE=/home/bsb/sec-config.yaml
 
 USER root
 
-RUN mkdir -p /opt/bsb-plugins/better-tunnels/0/1/0 /home/bsb/bp
+RUN mkdir -p /opt/bsb-plugins/@betterportal/tunnels/1/0/0 /home/bsb/bp
 RUN printf '{"private":true,"type":"module"}\n' > /opt/bsb-plugins/package.json
 
-COPY --from=build /app/package.json /opt/bsb-plugins/better-tunnels/0/1/0/package.json
-COPY --from=build /app/package-lock.json /opt/bsb-plugins/better-tunnels/0/1/0/package-lock.json
-COPY --from=build /app/lib /opt/bsb-plugins/better-tunnels/0/1/0/lib
-COPY --from=prod-deps /app/node_modules /opt/bsb-plugins/better-tunnels/0/1/0/node_modules
+COPY --from=build /app/package.json /opt/bsb-plugins/@betterportal/tunnels/1/0/0/package.json
+COPY --from=build /app/package-lock.json /opt/bsb-plugins/@betterportal/tunnels/1/0/0/package-lock.json
+COPY --from=build /app/lib /opt/bsb-plugins/@betterportal/tunnels/1/0/0/lib
+COPY --from=prod-deps /app/node_modules /opt/bsb-plugins/@betterportal/tunnels/1/0/0/node_modules
 COPY sec-config.yaml /home/bsb/sec-config.yaml
 
 RUN chown -R node:node /opt/bsb-plugins /home/bsb/sec-config.yaml /home/bsb/bp

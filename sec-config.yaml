@@ -11,7 +11,7 @@ default:
   services:
     tunnel-web:
       plugin: service-tunnel-web
-      package: better-tunnels
+      package: "@betterportal/tunnels"
       enabled: true
       config:
         port: 8080
@@ -22,7 +22,7 @@ default:
         turnstileSecretKey: ""
     tunnel-client-api:
       plugin: service-tunnel-client-api
-      package: better-tunnels
+      package: "@betterportal/tunnels"
       enabled: true
       config:
         port: 8081
@@ -30,7 +30,7 @@ default:
         publicUrl: https://tunnels.betterportal.dev
     tunnel-betterportal:
       plugin: service-betterportal
-      package: better-tunnels
+      package: "@betterportal/tunnels"
       enabled: true
       config:
         port: 8083
