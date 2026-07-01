@@ -27,6 +27,18 @@ connect.tunnels.betterportal.dev {
 	}
 }
 
+betterportal.tunnels.betterportal.dev {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+
+	reverse_proxy {$APP_UPSTREAM:app}:8083 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}
+
 tunnels.betterportal.dev, *.tunnels.betterportal.dev {
 	tls {
 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}

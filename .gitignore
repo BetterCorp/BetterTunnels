@@ -3,7 +3,6 @@ lib/
 dist/
 .gocache/
 .env
-prisma/migrations/
 src/.bsb/
 src/generated/
 *.log

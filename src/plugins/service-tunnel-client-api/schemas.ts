@@ -6,7 +6,8 @@ export const TunnelCreateSchema = av.object({
   targetHost: av.string().minLength(1).default("127.0.0.1"),
   targetPort: av.number(),
   authenticated: av.bool().default(false),
-  prefix: av.optional(av.string())
+  prefix: av.optional(av.string()),
+  token: av.optional(av.string())
 }, { unknownKeys: "strip" });
 export type TunnelCreateInput = Infer<typeof TunnelCreateSchema>;
 
@@ -42,3 +43,25 @@ export const FileConfigSchema = av.object({
   tunnels: av.array(TunnelConfigSchema).default([])
 }, { unknownKeys: "strip" });
 export type FileConfig = Infer<typeof FileConfigSchema>;
+
+export const AuthStartRequestSchema = av.object({
+  deviceName: av.optional(av.string()),
+  authAppBaseUrl: av.optional(av.string())
+}, { unknownKeys: "strip" });
+export type AuthStartRequest = Infer<typeof AuthStartRequestSchema>;
+
+export const AuthStartResponseSchema = av.object({
+  sessionId: av.string(),
+  pollSecret: av.string(),
+  browserUrl: av.string(),
+  expiresAt: av.string()
+}, { unknownKeys: "strip" });
+
+export const AuthStatusResponseSchema = av.object({
+  status: av.string(),
+  token: av.optional(av.string()),
+  expiresAt: av.optional(av.string()),
+  tenantId: av.optional(av.string()),
+  bpUserSubject: av.optional(av.string()),
+  message: av.optional(av.string())
+}, { unknownKeys: "strip" });

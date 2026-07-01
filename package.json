@@ -20,6 +20,7 @@
     "@betterportal/framework": "^10.0.0",
     "@betterportal/plugin-bsb": "^10.0.0",
     "@bsb/base": "^9.6.41",
+    "@bsb/config-vault": "^9.6.47",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "anyvali": "^1.0.6",
@@ -44,7 +45,7 @@
   },
   "betterportal": {
     "routes": [
-      "src/plugins/service-betterportal-bettertunnels/bp-routes/"
+      "src/plugins/service-betterportal/bp-routes/"
     ]
   }
 }

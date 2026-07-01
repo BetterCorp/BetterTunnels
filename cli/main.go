@@ -29,6 +29,13 @@ const defaultServer = "wss://connect.tunnels.betterportal.dev"
 
 var sessionID = uuid()
 
+type cliState struct {
+	Token     string `json:"token,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	TenantID  string `json:"tenantId,omitempty"`
+	Subject   string `json:"bpUserSubject,omitempty"`
+}
+
 type tunnelConfig struct {
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
@@ -98,6 +105,8 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "login":
+		return login()
 	case "http":
 		if len(args) < 2 {
 			return errors.New("usage: btunnel http <port|host:port>")
@@ -183,6 +192,11 @@ func startTunnel(config tunnelConfig) error {
 	q.Set("targetPort", strconv.Itoa(config.Port))
 	if config.Prefix != "" {
 		q.Set("prefix", config.Prefix)
+	}
+	state, _ := loadState()
+	if state.Token != "" {
+		q.Set("authenticated", "true")
+		q.Set("token", state.Token)
 	}
 	u.RawQuery = q.Encode()
 
@@ -510,10 +524,169 @@ func closeReason(err error) string {
 }
 
 func usage() {
+	fmt.Println("usage: btunnel login")
 	fmt.Println("usage: btunnel http <port|host:port>")
 	fmt.Println("       btunnel host <dir> [port]")
 	fmt.Println("       btunnel host --dev <port> <command...>")
 	fmt.Println("       btunnel up")
+}
+
+type authStartResponse struct {
+	SessionID  string `json:"sessionId"`
+	PollSecret string `json:"pollSecret"`
+	BrowserURL string `json:"browserUrl"`
+	ExpiresAt  string `json:"expiresAt"`
+}
+
+type authStatusResponse struct {
+	Status        string `json:"status"`
+	Token         string `json:"token,omitempty"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
+	TenantID      string `json:"tenantId,omitempty"`
+	BPUserSubject string `json:"bpUserSubject,omitempty"`
+	Message       string `json:"message,omitempty"`
+}
+
+func login() error {
+	base := clientHTTPBase()
+	startURL := base + "/api/client/auth/start"
+	resp, err := http.Post(startURL, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("auth start failed: %s", strings.TrimSpace(string(raw)))
+	}
+	var started authStartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
+		return err
+	}
+
+	fmt.Println("Open this URL to authenticate BetterTunnels:")
+	fmt.Println(started.BrowserURL)
+	_ = openBrowser(started.BrowserURL)
+
+	deadline := time.Now().Add(10 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		status, err := pollAuthStatus(base, started.SessionID, started.PollSecret)
+		if err != nil {
+			return err
+		}
+		switch status.Status {
+		case "pending":
+			continue
+		case "approved":
+			if status.Token == "" {
+				return errors.New("auth completed without token")
+			}
+			if err := saveState(cliState{
+				Token:     status.Token,
+				ExpiresAt: status.ExpiresAt,
+				TenantID:  status.TenantID,
+				Subject:   status.BPUserSubject,
+			}); err != nil {
+				return err
+			}
+			fmt.Println("BetterTunnels CLI authenticated.")
+			return nil
+		default:
+			if status.Message != "" {
+				return errors.New(status.Message)
+			}
+			return fmt.Errorf("auth failed: %s", status.Status)
+		}
+	}
+	return errors.New("auth timed out")
+}
+
+func pollAuthStatus(base, sessionID, pollSecret string) (authStatusResponse, error) {
+	req, err := http.NewRequest("GET", base+"/api/client/auth/status?sessionId="+url.QueryEscape(sessionID), nil)
+	if err != nil {
+		return authStatusResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+pollSecret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return authStatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	var status authStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return authStatusResponse{}, err
+	}
+	return status, nil
+}
+
+func clientHTTPBase() string {
+	raw := os.Getenv("BETTER_TUNNELS_SERVER")
+	if raw == "" {
+		raw = defaultServer
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return strings.TrimRight(raw, "/")
+	}
+	switch u.Scheme {
+	case "wss":
+		u.Scheme = "https"
+	case "ws":
+		u.Scheme = "http"
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
+}
+
+func statePath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir = filepath.Join(dir, "BetterTunnels")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
+}
+
+func loadState() (cliState, error) {
+	path, err := statePath()
+	if err != nil {
+		return cliState{}, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return cliState{}, err
+	}
+	var state cliState
+	return state, json.Unmarshal(raw, &state)
+}
+
+func saveState(state cliState) error {
+	path, err := statePath()
+	if err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
+}
+
+func openBrowser(rawURL string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
+	case "darwin":
+		return exec.Command("open", rawURL).Start()
+	default:
+		return exec.Command("xdg-open", rawURL).Start()
+	}
 }
 
 func uuid() string {

@@ -78,6 +78,44 @@ model AuditEvent {
   createdAt DateTime @default(now())
 }
 
+model ClientAuthSession {
+  id              String            @id @default(cuid())
+  browserKeyHash  String
+  pollSecretHash  String
+  status          AuthSessionStatus @default(pending)
+  tenantId        String?
+  appId           String?
+  bpUserSubject   String?
+  bpUserEmail     String?
+  clientIpHash    String?
+  userAgentHash   String?
+  expiresAt       DateTime
+  approvedAt      DateTime?
+  consumedAt      DateTime?
+  createdAt       DateTime          @default(now())
+
+  @@index([status, expiresAt])
+}
+
+model ClientDeviceToken {
+  id             String    @id @default(cuid())
+  accountId      String?
+  tenantId       String
+  bpUserSubject  String
+  tokenHash      String    @unique
+  name           String?
+  ipRangeHash    String
+  ipFamily       String
+  userAgentHash  String?
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  lastUsedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, bpUserSubject])
+  @@index([expiresAt])
+}
+
 enum TunnelStatus {
   created
   active
@@ -92,4 +130,12 @@ enum AccountPlan {
   free
   paid
   admin
+}
+
+enum AuthSessionStatus {
+  pending
+  approved
+  consumed
+  expired
+  denied
 }

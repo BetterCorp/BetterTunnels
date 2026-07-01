@@ -13,9 +13,19 @@ import * as av from "anyvali";
 import { createServer, type Server } from "node:http";
 import { H3, toNodeHandler } from "h3";
 import { WebSocketServer, type WebSocket } from "ws";
-import { TunnelCreateSchema, ClientFrameSchema } from "./schemas.js";
+import { TunnelCreateSchema, ClientFrameSchema, AuthStartRequestSchema, AuthStartResponseSchema, AuthStatusResponseSchema } from "./schemas.js";
 import { buildTunnelSubdomain, hashValue, randomPrefix } from "./ids.js";
 import { prisma } from "../../prisma.js";
+import {
+  AUTH_SESSION_TTL_MS,
+  DEVICE_TOKEN_TTL_MS,
+  bearerToken,
+  hashSecret,
+  normalizeIpRange,
+  randomToken,
+  shortBrowserKey,
+  verifySecret
+} from "../../auth.js";
 import { TunnelRegistry, type ActiveTunnel, type PendingRequest } from "./registry.js";
 import TunnelWebClient from "../../.bsb/clients/service-tunnel-web.js";
 
@@ -28,7 +38,9 @@ export const Config = createConfigSchema(
   av.object({
     port: av.number().default(8081).describe("Client API listener port"),
     domain: av.string().default("tunnels.betterportal.dev").describe("Default public tunnel domain"),
-    publicUrl: av.string().default("https://tunnels.betterportal.dev").describe("Public base URL")
+    publicUrl: av.string().default("https://tunnels.betterportal.dev").describe("Public base URL"),
+    authAppBaseUrl: av.string().default("https://betterportal.cloud").describe("BetterPortal app URL used for CLI auth"),
+    authVerifyPath: av.string().default("/cli-auth/verify").describe("BetterPortal CLI auth verify route")
   }).describe("service-tunnel-client-api config")
 );
 
@@ -174,6 +186,96 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       headers: { "content-type": "text/plain; charset=utf-8" }
     }));
 
+    this.app.post("/api/client/auth/start", async (event) => {
+      const body = AuthStartRequestSchema.parse(await safeJson(event.req));
+      const browserKey = shortBrowserKey();
+      const pollSecret = randomToken();
+      const expiresAt = new Date(Date.now() + AUTH_SESSION_TTL_MS);
+      const authBase = body.authAppBaseUrl ?? this.config.authAppBaseUrl;
+      const browserUrl = buildAuthUrl(authBase, this.config.authVerifyPath, browserKey);
+      const clientIp = proxyClientIpFromHeaders(event.req.headers);
+
+      const session = await prisma.clientAuthSession.create({
+        data: {
+          browserKeyHash: hashSecret(browserKey),
+          pollSecretHash: hashSecret(pollSecret),
+          clientIpHash: hashSecret(clientIp),
+          userAgentHash: hashSecret(event.req.headers.get("user-agent") ?? ""),
+          expiresAt
+        }
+      });
+
+      const url = new URL(browserUrl);
+      url.searchParams.set("session", session.id);
+      url.searchParams.set("key", browserKey);
+
+      return json(AuthStartResponseSchema.parse({
+        sessionId: session.id,
+        pollSecret,
+        browserUrl: url.toString(),
+        expiresAt: expiresAt.toISOString()
+      }));
+    });
+
+    this.app.get("/api/client/auth/status", async (event) => {
+      const url = new URL(event.req.url);
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const pollSecret = bearerToken(event.req.headers) ?? "";
+      if (!sessionId || !pollSecret) {
+        return json(AuthStatusResponseSchema.parse({ status: "invalid", message: "Missing auth session credentials." }), 401);
+      }
+
+      const session = await prisma.clientAuthSession.findUnique({ where: { id: sessionId } });
+      if (!session || !verifySecret(pollSecret, session.pollSecretHash)) {
+        return json(AuthStatusResponseSchema.parse({ status: "invalid", message: "Invalid auth session." }), 401);
+      }
+      if (session.expiresAt <= new Date() && session.status === "pending") {
+        await prisma.clientAuthSession.update({ where: { id: session.id }, data: { status: "expired" } });
+        return json(AuthStatusResponseSchema.parse({ status: "expired", message: "Authentication session expired." }), 410);
+      }
+      if (session.status === "pending") {
+        return json(AuthStatusResponseSchema.parse({ status: "pending" }));
+      }
+      if (session.status !== "approved" || !session.tenantId || !session.bpUserSubject) {
+        return json(AuthStatusResponseSchema.parse({ status: session.status, message: "Authentication session is not approved." }), 409);
+      }
+
+      const clientIp = proxyClientIpFromHeaders(event.req.headers);
+      const ipRange = normalizeIpRange(clientIp);
+      if (!ipRange) {
+        return json(AuthStatusResponseSchema.parse({ status: "invalid", message: "Unable to bind token to public IP range." }), 400);
+      }
+
+      const deviceToken = `bt_${randomToken(32)}`;
+      const tokenExpiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
+      await prisma.$transaction([
+        prisma.clientDeviceToken.create({
+          data: {
+            tenantId: session.tenantId,
+            bpUserSubject: session.bpUserSubject,
+            tokenHash: hashSecret(deviceToken),
+            name: "BetterTunnels CLI",
+            ipRangeHash: hashSecret(ipRange.cidr),
+            ipFamily: ipRange.family,
+            userAgentHash: hashSecret(event.req.headers.get("user-agent") ?? ""),
+            expiresAt: tokenExpiresAt
+          }
+        }),
+        prisma.clientAuthSession.update({
+          where: { id: session.id },
+          data: { status: "consumed", consumedAt: new Date() }
+        })
+      ]);
+
+      return json(AuthStatusResponseSchema.parse({
+        status: "approved",
+        token: deviceToken,
+        expiresAt: tokenExpiresAt.toISOString(),
+        tenantId: session.tenantId,
+        bpUserSubject: session.bpUserSubject
+      }));
+    });
+
     this.server.on("upgrade", (request, socket, head) => {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       if (url.pathname !== "/api/client/ws") {
@@ -208,16 +310,27 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       targetHost: url.searchParams.get("targetHost") ?? "127.0.0.1",
       targetPort: Number(url.searchParams.get("targetPort") ?? "0"),
       authenticated: url.searchParams.get("authenticated") === "true",
-      prefix: url.searchParams.get("prefix") ?? undefined
+      prefix: url.searchParams.get("prefix") ?? undefined,
+      token: url.searchParams.get("token") ?? undefined
     });
 
-    const prefix = input.authenticated && input.prefix ? input.prefix : randomPrefix();
+    const authContext = input.authenticated
+      ? await validateDeviceToken(input.token, clientIp, Array.isArray(userAgent) ? userAgent.join(" ") : userAgent)
+      : undefined;
+    if (input.authenticated && !authContext) {
+      ws.close(1008, "reauth required");
+      obs.log.warn("CLIENT SESSION rejected authenticated tunnel from {clientIp}", { clientIp });
+      return;
+    }
+
+    const authenticated = !!authContext;
+    const prefix = authenticated && input.prefix ? input.prefix : randomPrefix();
     const subdomain = buildTunnelSubdomain(prefix, input.targetPort, clientIp);
-    const expiresAt = new Date(Date.now() + (input.authenticated ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
+    const expiresAt = new Date(Date.now() + (authenticated ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
     const sessionObs = this.createTrace("bt.client.session", {
       "bt.client.session_id": input.sessionId,
       "bt.tunnel.subdomain": subdomain,
-      "bt.tunnel.authenticated": input.authenticated,
+      "bt.tunnel.authenticated": authenticated,
       "client.address": clientIp
     });
     sessionObs.log.info("CLIENT SESSION connect {subdomain} from {clientIp}", {
@@ -229,6 +342,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       where: { id: input.sessionId },
       create: {
         id: input.sessionId,
+        accountId: authContext?.accountId,
         userAgent: Array.isArray(userAgent) ? userAgent.join(" ") : userAgent,
         ipHash: hashValue(clientIp),
         expiresAt
@@ -244,7 +358,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         ownerServerId: this.appId,
         targetHost: input.targetHost,
         targetPort: input.targetPort,
-        authenticated: input.authenticated,
+        authenticated,
+        accountId: authContext?.accountId,
         status: "active",
         expiresAt
       },
@@ -253,7 +368,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         ownerServerId: this.appId,
         targetHost: input.targetHost,
         targetPort: input.targetPort,
-        authenticated: input.authenticated,
+        authenticated,
+        accountId: authContext?.accountId,
         status: "active",
         expiresAt
       }
@@ -264,7 +380,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       subdomain,
       targetHost: input.targetHost,
       targetPort: input.targetPort,
-      authenticated: input.authenticated,
+      authenticated,
       expiresAt,
       ws,
       pending: new Map(),
@@ -459,11 +575,57 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 }
 
+async function safeJson(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+
+function buildAuthUrl(base: string, path: string, browserKey: string): string {
+  const url = new URL(path.startsWith("/") ? path : `/${path}`, base);
+  url.searchParams.set("key", browserKey);
+  return url.toString();
+}
+
+async function validateDeviceToken(token: string | undefined, clientIp: string, userAgent: string): Promise<{ accountId?: string } | undefined> {
+  if (!token) return undefined;
+  const ipRange = normalizeIpRange(clientIp);
+  if (!ipRange) return undefined;
+
+  const row = await prisma.clientDeviceToken.findUnique({
+    where: { tokenHash: hashSecret(token) }
+  });
+  if (!row || row.revokedAt || row.expiresAt <= new Date()) return undefined;
+  if (row.ipFamily !== ipRange.family || row.ipRangeHash !== hashSecret(ipRange.cidr)) return undefined;
+  if (row.userAgentHash && row.userAgentHash !== hashSecret(userAgent)) return undefined;
+
+  await prisma.clientDeviceToken.update({
+    where: { id: row.id },
+    data: { lastUsedAt: new Date() }
+  });
+  return { accountId: row.accountId ?? undefined };
+}
+
 function proxyClientIp(headers: import("node:http").IncomingHttpHeaders): string {
   const forwardedFor = firstPublicForwardedIp(firstHeader(headers["x-forwarded-for"]));
   if (forwardedFor) return forwardedFor;
 
   return firstHeader(headers["x-real-ip"])?.trim() || "unknown";
+}
+
+function proxyClientIpFromHeaders(headers: Headers): string {
+  const forwardedFor = firstPublicForwardedIp(headers.get("x-forwarded-for") ?? undefined);
+  if (forwardedFor) return forwardedFor;
+  return headers.get("x-real-ip")?.trim() || "unknown";
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {

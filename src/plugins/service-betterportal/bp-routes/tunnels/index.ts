@@ -7,14 +7,14 @@ import {
 } from "@betterportal/framework";
 import { prisma } from "../../../../prisma.js";
 
-export const viewId = "better-tunnels.management";
+export const viewId = "better-tunnels.tunnels";
 export const title = "BetterTunnels";
 export const description = "Tunnel sessions, status, and recent activity.";
 
 export const auth: ApiAuthRequirement = {
   required: true,
   permissions: [
-    { serviceId: "service.betterportal.bettertunnels", viewId, permissions: ["read"] }
+    { serviceId: "service.betterportal.tunnels", viewId, permissions: ["read"] }
   ]
 };
 

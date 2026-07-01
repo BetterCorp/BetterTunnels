@@ -29,11 +29,11 @@ default:
         domain: tunnels.betterportal.dev
         publicUrl: https://tunnels.betterportal.dev
     tunnel-betterportal:
-      plugin: service-betterportal-bettertunnels
+      plugin: service-betterportal
       package: better-tunnels
-      enabled: false
+      enabled: true
       config:
-        port: 8082
+        port: 8083
         betterportal:
           bootstrapStatePath: /home/bsb/bp/bootstrap/state.enc
           scopedConfigCachePath: /home/bsb/bp/sync-cache/scoped.json

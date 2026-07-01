@@ -1,6 +1,6 @@
 services:
   caddy:
-    image: bettertunnels-caddy:latest
+    image: ${BT_CADDY_IMAGE:-ghcr.io/bettercorp/bettertunnels/caddy:latest}
     environment:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       APP_UPSTREAM: ${APP_UPSTREAM:-app}
@@ -35,9 +35,14 @@ services:
         failure_action: rollback
 
   app:
-    image: bettertunnels-app:latest
+    image: ${BT_APP_IMAGE:-ghcr.io/bettercorp/bettertunnels/app:latest}
     environment:
       DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
+      BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
+      BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
+      vaultUrl: ${vaultUrl}
+      apiKeyId: ${apiKeyId}
+      apiSecret: ${apiSecret}
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s

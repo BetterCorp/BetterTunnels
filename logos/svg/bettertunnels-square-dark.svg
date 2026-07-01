@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="BetterTunnels square logo">
+    <rect width="1024" height="1024" rx="120" fill="#071225"/>
+    <g transform="translate(256 120) scale(1.0)">
+    <defs>
+      <linearGradient id="g" x1="120" y1="80" x2="390" y2="430" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#1495FF"/>
+        <stop offset="1" stop-color="#004DE6"/>
+      </linearGradient>
+    </defs>
+    
+    <path d="M126 344V226c0-73 57-132 130-132s130 59 130 132v118" fill="none" stroke="url(#g)" stroke-width="72" stroke-linecap="butt" stroke-linejoin="round"/>
+    <path d="M194 346L112 448H188L256 356L324 448H400L318 346" fill="#FFFFFF"/>
+    <path d="M226 304V226c0-17 13-30 30-30s30 13 30 30v78" fill="#FFFFFF"/>
+    </g>
+    <text x="512" y="832" text-anchor="middle" font-family="Inter, Arial, Helvetica, sans-serif" font-size="100" font-weight="800" letter-spacing="-4">
+      <tspan fill="#FFFFFF">Better</tspan><tspan fill="#0B6CFF">Tunnels</tspan>
+    </text>
+    </svg>

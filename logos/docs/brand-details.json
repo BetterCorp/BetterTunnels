@@ -1,0 +1,31 @@
+{
+  "brand": "BetterTunnels",
+  "description": "Secure developer-friendly tunnel product logo system.",
+  "colors": {
+    "primary_blue": "#0B6CFF",
+    "deep_blue": "#0054E8",
+    "navy": "#071A3A",
+    "dark": "#071225",
+    "white": "#FFFFFF"
+  },
+  "variants": [
+    "horizontal-light",
+    "horizontal-dark",
+    "square-light",
+    "square-dark",
+    "mark-transparent",
+    "mark-square-light",
+    "mark-square-dark"
+  ],
+  "favicon_sizes": [
+    "16x16",
+    "32x32",
+    "48x48",
+    "64x64",
+    "128x128",
+    "180x180",
+    "192x192",
+    "256x256",
+    "512x512"
+  ]
+}

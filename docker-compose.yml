@@ -25,9 +25,15 @@ services:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
+      BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
+      BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
+      vaultUrl: ${vaultUrl}
+      apiKeyId: ${apiKeyId}
+      apiSecret: ${apiSecret}
     expose:
       - "8080"
       - "8081"
+      - "8083"
 
   migrate:
     build:
@@ -38,6 +44,11 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
+      BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
+      BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
+      vaultUrl: ${vaultUrl}
+      apiKeyId: ${apiKeyId}
+      apiSecret: ${apiSecret}
     command: ["npx", "prisma", "migrate", "deploy"]
     restart: "no"
 
