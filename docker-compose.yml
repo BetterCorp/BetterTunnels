@@ -26,7 +26,7 @@ services:
       BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
       BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
       BSB_PLUGIN_DIRS: /mnt/plugins
-      BSB_PLUGINS: "@betterportal/tunnels@${BT_PACKAGE_VERSION:-latest}"
+      BSB_PLUGINS: ${BT_PACKAGE_SPEC:-@betterportal/tunnels}
       BSB_PLUGIN_UPDATE: ${BSB_PLUGIN_UPDATE:-false}
       BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
       vaultUrl: ${vaultUrl}

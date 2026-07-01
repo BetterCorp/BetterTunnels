@@ -41,18 +41,12 @@ services:
       BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
       BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
       BSB_PLUGIN_DIRS: /mnt/plugins
-      BSB_PLUGINS: "@betterportal/tunnels@${BT_PACKAGE_VERSION:-latest}"
+      BSB_PLUGINS: ${BT_PACKAGE_SPEC:-@betterportal/tunnels}
       BSB_PLUGIN_UPDATE: ${BSB_PLUGIN_UPDATE:-false}
       BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
       vaultUrl: ${vaultUrl}
       apiKeyId: ${apiKeyId}
       apiSecret: ${apiSecret}
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 15s
     volumes:
       - bsb-plugins:/mnt/plugins
       - bp-runtime:/home/bsb/bp
