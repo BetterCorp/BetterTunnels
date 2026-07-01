@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -56,7 +56,12 @@ jobs:
       - name: Publish BSB registry metadata
         env:
           BSB_REGISTRY_TOKEN: ${{ secrets.BSB_REGISTRY_TOKEN }}
-        run: npm run publish:client
+        run: |
+          if [ -z "${BSB_REGISTRY_TOKEN}" ]; then
+            echo "::error::Missing required repository secret: BSB_REGISTRY_TOKEN"
+            exit 1
+          fi
+          npm run publish:client
       - run: go test ./...
         working-directory: cli
       - name: Build CLI binaries
@@ -80,9 +85,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release create "${tag}" \
-            --title "BetterTunnels ${tag}" \
-            --notes "CLI release for ${tag}." \
-            "btunnel-${tag}.tar.gz" \
-            "btunnel-${tag}.zip" \
-            "btunnel-${tag}.sha256"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" \
+              "btunnel-${tag}.tar.gz" \
+              "btunnel-${tag}.zip" \
+              "btunnel-${tag}.sha256" \
+              --clobber
+          else
+            gh release create "${tag}" \
+              --title "BetterTunnels ${tag}" \
+              --notes "CLI release for ${tag}." \
+              "btunnel-${tag}.tar.gz" \
+              "btunnel-${tag}.zip" \
+              "btunnel-${tag}.sha256"
+          fi
