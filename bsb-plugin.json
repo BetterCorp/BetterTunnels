@@ -1,6 +1,22 @@
 {
   "nodejs": [
     {
+      "id": "service-tunnel-client-api",
+      "name": "service-tunnel-client-api",
+      "basePath": "./",
+      "description": "Client websocket/API service",
+      "tags": [
+        "service",
+        "websocket",
+        "tunnel"
+      ],
+      "documentation": [],
+      "pluginPath": "src/plugins/service-tunnel-client-api/",
+      "links": {
+        "github": "https://github.com/BetterCorp/BetterTunnels"
+      }
+    },
+    {
       "id": "service-tunnel-web",
       "name": "service-tunnel-web",
       "basePath": "./",
@@ -11,7 +27,28 @@
         "tunnel"
       ],
       "documentation": [],
-      "pluginPath": "src/plugins/service-tunnel-web/"
+      "pluginPath": "src/plugins/service-tunnel-web/",
+      "links": {
+        "github": "https://github.com/BetterCorp/BetterTunnels"
+      }
+    },
+    {
+      "id": "service-tunnels-admin",
+      "name": "service-tunnels-admin",
+      "basePath": "./",
+      "description": "BetterPortal public and management UI for BetterTunnels",
+      "tags": [
+        "betterportal",
+        "web",
+        "management",
+        "tunnels"
+      ],
+      "documentation": [],
+      "pluginPath": "src/plugins/service-tunnels-admin/",
+      "image": "./betterportal-logo.png",
+      "links": {
+        "github": "https://github.com/BetterCorp/BetterTunnels"
+      }
     }
   ]
 }

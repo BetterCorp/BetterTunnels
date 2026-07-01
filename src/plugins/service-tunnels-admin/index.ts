@@ -16,7 +16,7 @@ const PluginConfigSchema = av.object({
 
 const Config = createConfigSchema(
   {
-    name: "service-betterportal",
+    name: "service-tunnels-admin",
     description: "BetterPortal public and management UI for BetterTunnels",
     image: "./betterportal-logo.png",
     tags: ["betterportal", "web", "management", "tunnels"]

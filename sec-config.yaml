@@ -28,8 +28,8 @@ default:
         port: 8081
         domain: tunnels.betterportal.dev
         publicUrl: https://tunnels.betterportal.dev
-    tunnel-betterportal:
-      plugin: service-betterportal
+    tunnel-admin:
+      plugin: service-tunnels-admin
       package: "@betterportal/tunnels"
       enabled: true
       config:
