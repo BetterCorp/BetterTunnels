@@ -1,6 +1,6 @@
 services:
   caddy:
-    image: ${BT_CADDY_IMAGE:-ghcr.io/bettercorp/bettertunnels/caddy:latest}
+    image: ${BT_CADDY_IMAGE:-code.bettercorp.dev/bettercorp/bettertunnels/caddy:latest}
     environment:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       APP_UPSTREAM: ${APP_UPSTREAM:-app}
@@ -35,11 +35,15 @@ services:
         failure_action: rollback
 
   app:
-    image: ${BT_APP_IMAGE:-ghcr.io/bettercorp/bettertunnels/app:latest}
+    image: ${BSB_IMAGE:-code.bettercorp.dev/bettercorp/service-base:node-latest}
     environment:
       DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
       BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
       BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
+      BSB_PLUGIN_DIRS: /mnt/plugins
+      BSB_PLUGINS: "@betterportal/tunnels@${BT_PACKAGE_VERSION:-latest}"
+      BSB_PLUGIN_UPDATE: ${BSB_PLUGIN_UPDATE:-false}
+      BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
       vaultUrl: ${vaultUrl}
       apiKeyId: ${apiKeyId}
       apiSecret: ${apiSecret}
@@ -50,6 +54,7 @@ services:
       retries: 6
       start_period: 15s
     volumes:
+      - bsb-plugins:/mnt/plugins
       - bp-runtime:/home/bsb/bp
     networks:
       - public
@@ -107,3 +112,5 @@ volumes:
     external: true
   bp-runtime:
     name: app_bettertunnels-bp-runtime
+  bsb-plugins:
+    name: app_bettertunnels-bsb-plugins

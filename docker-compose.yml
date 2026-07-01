@@ -17,16 +17,18 @@ services:
       - caddy-config:/config
 
   app:
-    build: .
+    image: ${BSB_IMAGE:-code.bettercorp.dev/bettercorp/service-base:node-latest}
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
       BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
       BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
+      BSB_PLUGIN_DIRS: /mnt/plugins
+      BSB_PLUGINS: "@betterportal/tunnels@${BT_PACKAGE_VERSION:-latest}"
+      BSB_PLUGIN_UPDATE: ${BSB_PLUGIN_UPDATE:-false}
+      BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
       vaultUrl: ${vaultUrl}
       apiKeyId: ${apiKeyId}
       apiSecret: ${apiSecret}
@@ -34,23 +36,9 @@ services:
       - "8080"
       - "8081"
       - "8083"
-
-  migrate:
-    build:
-      context: .
-      target: build
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
-      BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
-      BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
-      vaultUrl: ${vaultUrl}
-      apiKeyId: ${apiKeyId}
-      apiSecret: ${apiSecret}
-    command: ["npx", "prisma", "migrate", "deploy"]
-    restart: "no"
+    volumes:
+      - bsb-plugins:/mnt/plugins
+      - bp-runtime:/home/bsb/bp
 
   postgres:
     image: postgres:18
@@ -68,5 +56,7 @@ services:
 
 volumes:
   bettertunnels-postgres:
+  bsb-plugins:
+  bp-runtime:
   caddy-data:
   caddy-config:
