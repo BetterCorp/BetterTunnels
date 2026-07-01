@@ -10,7 +10,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json tsconfig.json prisma.config.ts ./
+COPY betterportal-logo.png ./
 COPY prisma ./prisma
+COPY scripts ./scripts
 COPY src ./src
 
 RUN npm ci
@@ -36,6 +38,8 @@ RUN printf '{"private":true,"type":"module"}\n' > /opt/bsb-plugins/package.json
 
 COPY --from=build /app/package.json /opt/bsb-plugins/@betterportal/tunnels/1/0/0/package.json
 COPY --from=build /app/package-lock.json /opt/bsb-plugins/@betterportal/tunnels/1/0/0/package-lock.json
+COPY --from=build /app/bsb-plugin.json /opt/bsb-plugins/@betterportal/tunnels/1/0/0/bsb-plugin.json
+COPY --from=build /app/betterportal-logo.png /opt/bsb-plugins/@betterportal/tunnels/1/0/0/betterportal-logo.png
 COPY --from=build /app/lib /opt/bsb-plugins/@betterportal/tunnels/1/0/0/lib
 COPY --from=prod-deps /app/node_modules /opt/bsb-plugins/@betterportal/tunnels/1/0/0/node_modules
 COPY sec-config.yaml /home/bsb/sec-config.yaml
