@@ -4,12 +4,8 @@
   "private": true,
   "type": "module",
   "license": "(AGPL-3.0-only OR Commercial)",
-  "bin": {
-    "btunnel": "./dist/btunnel.cjs"
-  },
   "scripts": {
     "build": "bsb-plugin-cli build",
-    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node24 --format=cjs --banner:js=\"#!/usr/bin/env node\" --outfile=dist/btunnel.cjs",
     "typecheck": "tsc -p tsconfig.json",
     "dev": "bsb-plugin-cli dev",
     "start": "bsb-plugin-cli start",
@@ -36,7 +32,6 @@
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
-    "esbuild": "^0.28.1",
     "prisma": "^7.8.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"

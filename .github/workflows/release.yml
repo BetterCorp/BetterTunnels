@@ -29,32 +29,33 @@ jobs:
           node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: cli/go.sum
       - name: Validate release tag
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
       - run: npm ci
       - run: npm run check
-      - run: npm run build:cli
-      - name: Package CLI
+      - run: go test ./...
+        working-directory: cli
+      - name: Build CLI binaries
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          mkdir -p release
-          cp dist/btunnel.cjs release/btunnel.cjs
-          cat > release/README.txt <<'EOF'
-          BetterTunnels CLI
-
-          Requires Node.js 24+.
-
-          Run:
-            node btunnel.cjs http 3100
-
-          Optional:
-            chmod +x btunnel.cjs
-            ./btunnel.cjs http 3100
-          EOF
-          (cd release && tar -czf "../btunnel-${tag}.tar.gz" .)
-          (cd release && zip -q -r "../btunnel-${tag}.zip" .)
+          mkdir -p dist/cli
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            ext=""
+            if [ "${os}" = "windows" ]; then ext=".exe"; fi
+            out="dist/cli/btunnel-${os}-${arch}${ext}"
+            (cd cli && CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "../${out}" .)
+          done
+          sha256sum dist/cli/* > dist/cli/SHA256SUMS
+          (cd dist/cli && tar -czf "../../btunnel-${tag}.tar.gz" .)
+          (cd dist/cli && zip -q -r "../../btunnel-${tag}.zip" .)
           sha256sum "btunnel-${tag}.tar.gz" "btunnel-${tag}.zip" > "btunnel-${tag}.sha256"
       - name: Create GitHub Release
         env:
@@ -63,7 +64,7 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           gh release create "${tag}" \
             --title "BetterTunnels ${tag}" \
-            --notes "CLI release for ${tag}. Requires Node.js 24+." \
+            --notes "CLI release for ${tag}." \
             "btunnel-${tag}.tar.gz" \
             "btunnel-${tag}.zip" \
             "btunnel-${tag}.sha256"

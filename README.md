@@ -32,13 +32,20 @@ Run a tunnel:
 npm run cli -- http 3300
 ```
 
+Build the release CLI:
+
+```powershell
+cd cli
+go build -o ..\dist\btunnel.exe .
+```
+
 ## Notes
 
 - Default domain: `tunnels.betterportal.dev`.
 - Anonymous configured prefixes are ignored.
 - Authenticated prefix handling is designed but auth is not in the first runtime slice.
 - The H3/WS runtime is owned by the `service-tunnel-web` BSB plugin.
-- The current Node CLI is a development client. Final CLI should likely be Rust or Go for cross-OS static builds.
+- The release CLI lives in `cli/` and builds to single-file Go binaries for Windows, Linux, and macOS.
 
 ## Docker
 
