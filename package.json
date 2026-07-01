@@ -22,6 +22,7 @@
     "bp-codegen": "bp-codegen",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "publish:client": "bsb client publish",
     "test": "node --import tsx --test tests/*.test.ts",
     "check": "npm run build && npm test"
   },
@@ -47,6 +48,7 @@
     "typescript": "^5.9.3"
   },
   "bsb": {
+    "orgId": "betterportal",
     "hooks": {
       "afterSchemas": "bp-codegen",
       "beforeCompile": "prisma:generate"
