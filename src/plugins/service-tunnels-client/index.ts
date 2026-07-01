@@ -16,6 +16,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { TunnelCreateSchema, ClientFrameSchema, AuthStartRequestSchema, AuthStartResponseSchema, AuthStatusResponseSchema } from "./schemas.js";
 import { buildTunnelSubdomain, hashValue, randomPrefix } from "./ids.js";
 import { prisma } from "../../prisma.js";
+import { configurePrisma } from "../../prisma.js";
 import {
   AUTH_SESSION_TTL_MS,
   DEVICE_TOKEN_TTL_MS,
@@ -36,6 +37,9 @@ export const Config = createConfigSchema(
     tags: ["service", "websocket", "tunnel"]
   },
   av.object({
+    database: av.object({
+      connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
+    }, { unknownKeys: "strip" }).describe("Database configuration"),
     port: av.number().default(8081).describe("Client API listener port"),
     domain: av.string().default("tunnels.betterportal.dev").describe("Default public tunnel domain"),
     publicUrl: av.string().default("https://tunnels.betterportal.dev").describe("Public base URL"),
@@ -124,6 +128,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 
   async init(obs: Observable): Promise<void> {
+    configurePrisma(this.config.database.connectionString);
     obs.log.info("init {plugin}", { plugin: this.pluginName });
     await this.events.onReturnableEvent("proxy.request", obs, async (_handlerObs, input) => {
       _handlerObs.log.info("CLIENT API proxy.request {method} {hostname}{path}", {

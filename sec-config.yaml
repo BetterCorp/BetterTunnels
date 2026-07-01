@@ -14,6 +14,8 @@ default:
       package: "@betterportal/tunnels"
       enabled: true
       config:
+        database:
+          connectionString: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
         port: 8080
         domain: tunnels.betterportal.dev
         verificationHost: verify.tunnels.betterportal.dev
@@ -25,6 +27,8 @@ default:
       package: "@betterportal/tunnels"
       enabled: true
       config:
+        database:
+          connectionString: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
         port: 8081
         domain: tunnels.betterportal.dev
         publicUrl: https://tunnels.betterportal.dev
@@ -33,6 +37,8 @@ default:
       package: "@betterportal/tunnels"
       enabled: true
       config:
+        database:
+          connectionString: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
         port: 8083
         betterportal:
           bootstrapStatePath: /data/bp/bootstrap/state.enc

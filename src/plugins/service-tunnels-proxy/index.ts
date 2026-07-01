@@ -17,6 +17,7 @@ import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js"
 import { forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
 import { createVerificationFlow, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
+import { configurePrisma } from "../../prisma.js";
 
 export const Config = createConfigSchema(
   {
@@ -25,6 +26,9 @@ export const Config = createConfigSchema(
     tags: ["service", "h3", "tunnel"]
   },
   av.object({
+    database: av.object({
+      connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
+    }, { unknownKeys: "strip" }).describe("Database configuration"),
     port: av.number().default(8080).describe("Public web listener port"),
     domain: av.string().default("tunnels.betterportal.dev").describe("Tunnel root domain"),
     verificationHost: av.string().default("verify.tunnels.betterportal.dev").describe("Verification host"),
@@ -85,6 +89,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 
   async init(obs: Observable): Promise<void> {
+    configurePrisma(this.config.database.connectionString);
     await this.events.onEventSpecific("ws.fromOrigin", this.appId, obs, async (_handlerObs, input) => {
       const ws = this.publicSockets.get(input.publicSocketId);
       if (!ws || ws.readyState !== ws.OPEN) return;

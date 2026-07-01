@@ -1,5 +1,6 @@
 import {
   type BSBServiceConstructor,
+  type Observable,
   createConfigSchema,
   createEventSchemas
 } from "@bsb/base";
@@ -7,10 +8,14 @@ import * as av from "anyvali";
 import type { ConfigSchemaDescriptor } from "@betterportal/framework";
 import { BetterPortalConfigSchema, BPService, type BPServiceDefinition } from "@betterportal/plugin-bsb";
 import { registry } from "./.bp-generated/registry.js";
+import { configurePrisma } from "../../prisma.js";
 
 const PluginConfigSchema = av.object({
   host: av.string().minLength(1).default("0.0.0.0"),
   port: av.int().min(1).default(8083),
+  database: av.object({
+    connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
+  }, { unknownKeys: "strip" }).describe("Database configuration"),
   betterportal: BetterPortalConfigSchema
 }, { unknownKeys: "strip" });
 
@@ -98,6 +103,11 @@ export class Plugin extends BPService<InstanceType<typeof Config>, typeof EventS
 
   constructor(cfg: BSBServiceConstructor<InstanceType<typeof Config>, typeof EventSchemas>) {
     super({ ...cfg, eventSchemas: EventSchemas });
+  }
+
+  async init(obs: Observable): Promise<void> {
+    configurePrisma(this.config.database.connectionString);
+    await super.init(obs);
   }
 
   protected definition(): BPServiceDefinition {

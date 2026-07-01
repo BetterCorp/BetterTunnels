@@ -22,12 +22,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://bettertunnels:bettertunnels@postgres:5432/bettertunnels?schema=public
       BSB_CONFIG_PLUGIN: ${BSB_CONFIG_PLUGIN:-config-vault}
       BSB_CONFIG_PLUGIN_PACKAGE: ${BSB_CONFIG_PLUGIN_PACKAGE:-@bsb/config-vault}
       BSB_PLUGIN_DIRS: /mnt/plugins
-      BSB_PLUGINS: ${BT_PACKAGE_SPEC:-@betterportal/tunnels}
-      BSB_PLUGIN_UPDATE: ${BSB_PLUGIN_UPDATE:-false}
       BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
       vaultUrl: ${vaultUrl}
       apiKeyId: ${apiKeyId}
@@ -39,6 +36,17 @@ services:
     volumes:
       - bsb-plugins:/mnt/plugins
       - app-data:/data
+
+  plugin-watcher:
+    image: ${BSB_IMAGE:-code.bettercorp.dev/bettercorp/service-base:node-latest}
+    environment:
+      BSB_PLUGIN_DIRS: /mnt/plugins
+      BSB_PLUGINS: ${BT_PACKAGE_SPEC:-@betterportal/tunnels@1.0}
+      BSB_PLUGIN_UPDATE: "true"
+      BSB_PLUGIN_WATCHER: "true"
+      BSB_SHOW_PACKAGES: ${BSB_SHOW_PACKAGES:-false}
+    volumes:
+      - bsb-plugins:/mnt/plugins
 
   postgres:
     image: postgres:18
