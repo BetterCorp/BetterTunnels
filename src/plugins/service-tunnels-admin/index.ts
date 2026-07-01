@@ -8,7 +8,7 @@ import * as av from "anyvali";
 import type { ConfigSchemaDescriptor } from "@betterportal/framework";
 import { BetterPortalConfigSchema, BPService, type BPServiceDefinition } from "@betterportal/plugin-bsb";
 import { registry } from "./.bp-generated/registry.js";
-import { configurePrisma } from "../../prisma.js";
+import { initializePrisma } from "../../prisma.js";
 
 const PluginConfigSchema = av.object({
   host: av.string().minLength(1).default("0.0.0.0"),
@@ -106,7 +106,7 @@ export class Plugin extends BPService<InstanceType<typeof Config>, typeof EventS
   }
 
   async init(obs: Observable): Promise<void> {
-    configurePrisma(this.config.database.connectionString);
+    await initializePrisma(this.config.database.connectionString, obs);
     await super.init(obs);
   }
 

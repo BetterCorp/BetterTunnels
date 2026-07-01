@@ -17,7 +17,7 @@ import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js"
 import { forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
 import { createVerificationFlow, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
-import { configurePrisma } from "../../prisma.js";
+import { initializePrisma } from "../../prisma.js";
 
 export const Config = createConfigSchema(
   {
@@ -89,7 +89,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 
   async init(obs: Observable): Promise<void> {
-    configurePrisma(this.config.database.connectionString);
+    await initializePrisma(this.config.database.connectionString, obs);
     await this.events.onEventSpecific("ws.fromOrigin", this.appId, obs, async (_handlerObs, input) => {
       const ws = this.publicSockets.get(input.publicSocketId);
       if (!ws || ws.readyState !== ws.OPEN) return;

@@ -16,7 +16,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { TunnelCreateSchema, ClientFrameSchema, AuthStartRequestSchema, AuthStartResponseSchema, AuthStatusResponseSchema } from "./schemas.js";
 import { buildTunnelSubdomain, hashValue, randomPrefix } from "./ids.js";
 import { prisma } from "../../prisma.js";
-import { configurePrisma } from "../../prisma.js";
+import { initializePrisma } from "../../prisma.js";
 import {
   AUTH_SESSION_TTL_MS,
   DEVICE_TOKEN_TTL_MS,
@@ -128,7 +128,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 
   async init(obs: Observable): Promise<void> {
-    configurePrisma(this.config.database.connectionString);
+    await initializePrisma(this.config.database.connectionString, obs);
     obs.log.info("init {plugin}", { plugin: this.pluginName });
     await this.events.onReturnableEvent("proxy.request", obs, async (_handlerObs, input) => {
       _handlerObs.log.info("CLIENT API proxy.request {method} {hostname}{path}", {
