@@ -27,11 +27,11 @@ import {
   verifySecret
 } from "../../auth.js";
 import { TunnelRegistry, type ActiveTunnel, type PendingRequest } from "./registry.js";
-import TunnelWebClient from "../../.bsb/clients/service-tunnel-web.js";
+import TunnelWebClient from "../../.bsb/clients/service-tunnels-proxy.js";
 
 export const Config = createConfigSchema(
   {
-    name: "service-tunnel-client-api",
+    name: "service-tunnels-client",
     description: "Client websocket/API service",
     tags: ["service", "websocket", "tunnel"]
   },
@@ -41,7 +41,7 @@ export const Config = createConfigSchema(
     publicUrl: av.string().default("https://tunnels.betterportal.dev").describe("Public base URL"),
     authAppBaseUrl: av.string().default("https://betterportal.cloud").describe("BetterPortal app URL used for CLI auth"),
     authVerifyPath: av.string().default("/cli-auth/verify").describe("BetterPortal CLI auth verify route")
-  }).describe("service-tunnel-client-api config")
+  }).describe("service-tunnels-client config")
 );
 
 export const EventSchemas = createEventSchemas({

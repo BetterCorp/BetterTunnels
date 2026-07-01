@@ -508,7 +508,7 @@ CLI self-hosting behavior:
 - `btunnel host .` can serve a static directory and expose it publicly without a separate local server.
 - `btunnel host --dev <command>` can run a local dev server and expose its selected port.
 - HTTP websocket upgrades from visitors should pass through to the local target as websocket connections; no path-specific config required.
-- Websocket passthrough must use BSB stream/event ownership between `service-tunnel-web` and `service-tunnel-client-api`; do not emulate it with buffered request events.
+- Websocket passthrough must use BSB stream/event ownership between `service-tunnels-proxy` and `service-tunnels-client`; do not emulate it with buffered request events.
 
 Smallest useful implementation slice:
 

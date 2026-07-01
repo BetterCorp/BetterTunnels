@@ -44,7 +44,7 @@ go build -o ..\dist\btunnel.exe .
 - Default domain: `tunnels.betterportal.dev`.
 - Anonymous configured prefixes are ignored.
 - Authenticated prefix handling is designed but auth is not in the first runtime slice.
-- The H3/WS runtime is owned by the `service-tunnel-web` BSB plugin.
+- The H3/WS runtime is owned by the `service-tunnels-proxy` BSB plugin.
 - The release CLI lives in `cli/` and builds to single-file Go binaries for Windows, Linux, and macOS.
 
 ## Docker

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSubdomain, buildTunnelSubdomain, normalizeHostPart } from "../src/plugins/service-tunnel-client-api/ids.js";
-import { TunnelCreateSchema } from "../src/plugins/service-tunnel-client-api/schemas.js";
-import { tunnelUnavailable } from "../src/plugins/service-tunnel-web/http.js";
+import { buildSubdomain, buildTunnelSubdomain, normalizeHostPart } from "../src/plugins/service-tunnels-client/ids.js";
+import { TunnelCreateSchema } from "../src/plugins/service-tunnels-client/schemas.js";
+import { tunnelUnavailable } from "../src/plugins/service-tunnels-proxy/http.js";
 import { normalizeIpRange } from "../src/auth.js";
 
 test("normalizes tunnel hostnames", () => {

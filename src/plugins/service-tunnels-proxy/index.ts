@@ -13,14 +13,14 @@ import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
 import { H3, getRequestURL, toNodeHandler } from "h3";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import TunnelClientApiClient from "../../.bsb/clients/service-tunnel-client-api.js";
+import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js";
 import { forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
 import { createVerificationFlow, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
 
 export const Config = createConfigSchema(
   {
-    name: "service-tunnel-web",
+    name: "service-tunnels-proxy",
     description: "Front-facing H3 tunnel service",
     tags: ["service", "h3", "tunnel"]
   },
@@ -33,7 +33,7 @@ export const Config = createConfigSchema(
     turnstileSecretKey: av.optional(av.string()).describe("Cloudflare Turnstile secret key"),
     maxHeaderBytes: av.number().default(32 * 1024).describe("Maximum accepted request header bytes"),
     maxBodyBytes: av.number().default(2 * 1024 * 1024).describe("Maximum accepted request body bytes")
-  }).describe("service-tunnel-web config")
+  }).describe("service-tunnels-proxy config")
 );
 
 export const EventSchemas = createEventSchemas({

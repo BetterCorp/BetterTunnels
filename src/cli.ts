@@ -6,7 +6,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket, { type RawData } from "ws";
-import { FileConfigSchema, TunnelConfigSchema, ClientFrameSchema } from "./plugins/service-tunnel-client-api/schemas.js";
+import { FileConfigSchema, TunnelConfigSchema, ClientFrameSchema } from "./plugins/service-tunnels-client/schemas.js";
 
 const serverUrl = process.env.BETTER_TUNNELS_SERVER ?? "wss://connect.tunnels.betterportal.dev";
 const sessionId = randomUUID();

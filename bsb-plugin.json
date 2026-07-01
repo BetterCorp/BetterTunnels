@@ -1,38 +1,6 @@
 {
   "nodejs": [
     {
-      "id": "service-tunnel-client-api",
-      "name": "service-tunnel-client-api",
-      "basePath": "./",
-      "description": "Client websocket/API service",
-      "tags": [
-        "service",
-        "websocket",
-        "tunnel"
-      ],
-      "documentation": [],
-      "pluginPath": "src/plugins/service-tunnel-client-api/",
-      "links": {
-        "github": "https://github.com/BetterCorp/BetterTunnels"
-      }
-    },
-    {
-      "id": "service-tunnel-web",
-      "name": "service-tunnel-web",
-      "basePath": "./",
-      "description": "Front-facing H3 tunnel service",
-      "tags": [
-        "service",
-        "h3",
-        "tunnel"
-      ],
-      "documentation": [],
-      "pluginPath": "src/plugins/service-tunnel-web/",
-      "links": {
-        "github": "https://github.com/BetterCorp/BetterTunnels"
-      }
-    },
-    {
       "id": "service-tunnels-admin",
       "name": "service-tunnels-admin",
       "basePath": "./",
@@ -46,6 +14,38 @@
       "documentation": [],
       "pluginPath": "src/plugins/service-tunnels-admin/",
       "image": "./betterportal-logo.png",
+      "links": {
+        "github": "https://github.com/BetterCorp/BetterTunnels"
+      }
+    },
+    {
+      "id": "service-tunnels-client",
+      "name": "service-tunnels-client",
+      "basePath": "./",
+      "description": "Client websocket/API service",
+      "tags": [
+        "service",
+        "websocket",
+        "tunnel"
+      ],
+      "documentation": [],
+      "pluginPath": "src/plugins/service-tunnels-client/",
+      "links": {
+        "github": "https://github.com/BetterCorp/BetterTunnels"
+      }
+    },
+    {
+      "id": "service-tunnels-proxy",
+      "name": "service-tunnels-proxy",
+      "basePath": "./",
+      "description": "Front-facing H3 tunnel service",
+      "tags": [
+        "service",
+        "h3",
+        "tunnel"
+      ],
+      "documentation": [],
+      "pluginPath": "src/plugins/service-tunnels-proxy/",
       "links": {
         "github": "https://github.com/BetterCorp/BetterTunnels"
       }

@@ -9,8 +9,8 @@ default:
       plugin: events-default
       enabled: true
   services:
-    tunnel-web:
-      plugin: service-tunnel-web
+    tunnels-proxy:
+      plugin: service-tunnels-proxy
       package: "@betterportal/tunnels"
       enabled: true
       config:
@@ -20,8 +20,8 @@ default:
         cookieSecret: dev-cookie-secret
         turnstileSiteKey: ""
         turnstileSecretKey: ""
-    tunnel-client-api:
-      plugin: service-tunnel-client-api
+    tunnels-client:
+      plugin: service-tunnels-client
       package: "@betterportal/tunnels"
       enabled: true
       config:
@@ -35,5 +35,5 @@ default:
       config:
         port: 8083
         betterportal:
-          bootstrapStatePath: /home/bsb/bp/bootstrap/state.enc
-          scopedConfigCachePath: /home/bsb/bp/sync-cache/scoped.json
+          bootstrapStatePath: /data/bp/bootstrap/state.enc
+          scopedConfigCachePath: /data/bp/sync-cache/scoped.json

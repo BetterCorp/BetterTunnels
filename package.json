@@ -1,6 +1,6 @@
 {
   "name": "@betterportal/tunnels",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "type": "module",
   "license": "(AGPL-3.0-only OR Commercial)",
   "repository": {
@@ -27,6 +27,8 @@
     "cli": "tsx src/cli.ts",
     "prune-bsb-generated": "node scripts/prune-bsb-generated.mjs",
     "copy-prisma-generated": "node scripts/copy-prisma-generated.mjs",
+    "sync-bsb-dependency-versions": "node scripts/sync-bsb-schema-dependency-versions.mjs",
+    "after-schemas": "npm run sync-bsb-dependency-versions && npm run bp-codegen",
     "bp-codegen": "bp-codegen",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -57,13 +59,9 @@
   },
   "bsb": {
     "orgId": "betterportal",
-    "publishIgnore": [
-      "service-tunnel-client-api",
-      "service-tunnel-web"
-    ],
     "hooks": {
       "beforeSchemas": "prune-bsb-generated",
-      "afterSchemas": "bp-codegen",
+      "afterSchemas": "after-schemas",
       "beforeCompile": "prisma:generate",
       "afterCompile": "copy-prisma-generated"
     }
