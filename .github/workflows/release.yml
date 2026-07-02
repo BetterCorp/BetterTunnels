@@ -67,6 +67,7 @@ jobs:
       - name: Build CLI binaries
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
           mkdir -p dist/cli
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"
@@ -74,7 +75,7 @@ jobs:
             ext=""
             if [ "${os}" = "windows" ]; then ext=".exe"; fi
             out="dist/cli/btunnel-${os}-${arch}${ext}"
-            (cd cli && CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "../${out}" .)
+            (cd cli && CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "../${out}" .)
           done
           sha256sum dist/cli/* > dist/cli/SHA256SUMS
           (cd dist/cli && tar -czf "../../btunnel-${tag}.tar.gz" .)
@@ -87,6 +88,7 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           if gh release view "${tag}" >/dev/null 2>&1; then
             gh release upload "${tag}" \
+              dist/cli/* \
               "btunnel-${tag}.tar.gz" \
               "btunnel-${tag}.zip" \
               "btunnel-${tag}.sha256" \
@@ -95,6 +97,7 @@ jobs:
             gh release create "${tag}" \
               --title "BetterTunnels ${tag}" \
               --notes "CLI release for ${tag}." \
+              dist/cli/* \
               "btunnel-${tag}.tar.gz" \
               "btunnel-${tag}.zip" \
               "btunnel-${tag}.sha256"

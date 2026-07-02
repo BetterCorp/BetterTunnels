@@ -11,6 +11,8 @@ import {
 } from "@bsb/base";
 import * as av from "anyvali";
 import { createServer, type Server } from "node:http";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { H3, toNodeHandler } from "h3";
 import { WebSocketServer, type WebSocket } from "ws";
 import { TunnelCreateSchema, ClientFrameSchema, AuthStartRequestSchema, AuthStartResponseSchema, AuthStatusResponseSchema } from "./schemas.js";
@@ -118,6 +120,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   private readonly server: Server;
   private readonly wss: WebSocketServer;
   private readonly web: TunnelWebClient;
+  private pluginPackageVersion = "0.0.0";
 
   constructor(cfg: BSBServiceConstructor<InstanceType<typeof Config>, typeof EventSchemas>) {
     super(cfg);
@@ -129,6 +132,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
 
   async init(obs: Observable): Promise<void> {
     await initializePrisma(this.config.database.connectionString, obs);
+    this.pluginPackageVersion = await loadPluginPackageVersion(this.packageCwd);
     obs.log.info("init {plugin}", { plugin: this.pluginName });
     await this.events.onReturnableEvent("proxy.request", obs, async (_handlerObs, input) => {
       _handlerObs.log.info("CLIENT API proxy.request {method} {hostname}{path}", {
@@ -402,7 +406,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       type: "tunnel.ready",
       publicUrl: publicUrl.replace(/\/$/, "").replace(`://${domain}`, `://${subdomain}.${domain}`),
       subdomain,
-      expiresAt: expiresAt.toISOString()
+      expiresAt: expiresAt.toISOString(),
+      serverVersion: this.pluginPackageVersion
     }));
 
     ws.on("message", (raw) => this.handleClientFrame(tunnel, raw.toString()));
@@ -585,6 +590,16 @@ async function safeJson(request: Request): Promise<unknown> {
     return await request.json();
   } catch {
     return {};
+  }
+}
+
+async function loadPluginPackageVersion(packageCwd: string): Promise<string> {
+  try {
+    const raw = await readFile(join(packageCwd, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version ? parsed.version : "0.0.0";
+  } catch {
+    return "0.0.0";
   }
 }
 

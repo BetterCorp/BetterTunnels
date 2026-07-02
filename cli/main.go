@@ -1,9 +1,11 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,8 +28,10 @@ import (
 )
 
 const defaultServer = "wss://connect.tunnels.betterportal.dev"
+const githubRepo = "BetterCorp/BetterTunnels"
 
 var sessionID = uuid()
+var version = "dev"
 
 type cliState struct {
 	Token     string `json:"token,omitempty"`
@@ -62,6 +66,7 @@ type frame struct {
 	Path                 string            `json:"path,omitempty"`
 	PublicURL            string            `json:"publicUrl,omitempty"`
 	ExpiresAt            string            `json:"expiresAt,omitempty"`
+	ServerVersion        string            `json:"serverVersion,omitempty"`
 	OriginMs             *float64          `json:"originMs,omitempty"`
 	CLIOverheadMs        *float64          `json:"cliOverheadMs,omitempty"`
 	TotalMs              *float64          `json:"totalMs,omitempty"`
@@ -107,6 +112,24 @@ func run(args []string) error {
 	switch args[0] {
 	case "login":
 		return login()
+	case "version":
+		fmt.Println(versionLabel(version))
+		return nil
+	case "update":
+		target := "latest"
+		if len(args) > 1 {
+			target = args[1]
+		}
+		updated, err := updateCLI(target)
+		if err != nil {
+			return err
+		}
+		if updated {
+			fmt.Println("BetterTunnels CLI updated. Restart your command to use the new version.")
+		} else {
+			fmt.Println("BetterTunnels CLI is already up to date.")
+		}
+		return nil
 	case "http":
 		if len(args) < 2 {
 			return errors.New("usage: btunnel http <port|host:port>")
@@ -190,6 +213,7 @@ func startTunnel(config tunnelConfig) error {
 	q.Set("sessionId", sessionID)
 	q.Set("targetHost", config.Host)
 	q.Set("targetPort", strconv.Itoa(config.Port))
+	q.Set("clientVersion", version)
 	if config.Prefix != "" {
 		q.Set("prefix", config.Prefix)
 	}
@@ -274,10 +298,18 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 
 		switch {
 		case f.Type == "tunnel.ready":
+			if maybeAutoUpdate(f.ServerVersion) {
+				_ = conn.Close(websocket.StatusGoingAway, "cli updated")
+				close(closed)
+				os.Exit(0)
+			}
 			fmt.Println("Tunnel active")
 			fmt.Printf("Local:  http://%s:%d\n", config.Host, config.Port)
 			fmt.Printf("Public: %s\n", f.PublicURL)
 			fmt.Printf("TTL:    %s\n", f.ExpiresAt)
+			if f.ServerVersion != "" {
+				fmt.Printf("Server: %s\n", versionLabel(f.ServerVersion))
+			}
 		case f.Type == "tunnel.closed":
 			fmt.Printf("Tunnel closed by server: code=%d reason=%s\n", f.Code, f.Message)
 			_ = conn.Close(websocket.StatusNormalClosure, "")
@@ -525,6 +557,8 @@ func closeReason(err error) string {
 
 func usage() {
 	fmt.Println("usage: btunnel login")
+	fmt.Println("usage: btunnel version")
+	fmt.Println("usage: btunnel update [version]")
 	fmt.Println("usage: btunnel http <port|host:port>")
 	fmt.Println("       btunnel host <dir> [port]")
 	fmt.Println("       btunnel host --dev <port> <command...>")
@@ -716,4 +750,347 @@ func loadDotEnv() {
 			_ = os.Setenv(key, value)
 		}
 	}
+}
+
+func maybeAutoUpdate(serverVersion string) bool {
+	if !shouldUpdate(version, serverVersion) {
+		return false
+	}
+	fmt.Printf("CLI update available: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
+	updated, err := updateCLI(serverVersion)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Automatic CLI update failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Run `btunnel update` manually after this session.")
+		return false
+	}
+	if updated {
+		fmt.Println("BetterTunnels CLI updated. Restarting is required; exiting this session now.")
+		return true
+	}
+	return false
+}
+
+func updateCLI(target string) (bool, error) {
+	current := normalizeVersion(version)
+	desired, err := resolveUpdateVersion(target)
+	if err != nil {
+		return false, err
+	}
+	if current != "dev" && current == desired {
+		return false, nil
+	}
+	if current == "dev" && target != "latest" {
+		fmt.Printf("Development CLI build will be replaced with %s.\n", versionLabel(desired))
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return false, err
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return false, err
+	}
+
+	assetName := releaseAssetName()
+	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", githubRepo, desired, assetName)
+	checksumsURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/SHA256SUMS", githubRepo, desired)
+	tempPath := filepath.Join(filepath.Dir(exe), fmt.Sprintf(".%s.%d.update", filepath.Base(exe), time.Now().UnixNano()))
+	if runtime.GOOS == "windows" && !strings.HasSuffix(tempPath, ".exe") {
+		tempPath += ".exe"
+	}
+	if err := downloadReleaseAsset(assetURL, tempPath); err != nil {
+		_ = os.Remove(tempPath)
+		return false, err
+	}
+	if err := verifyReleaseChecksum(checksumsURL, assetName, tempPath); err != nil {
+		_ = os.Remove(tempPath)
+		return false, err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(tempPath, 0o755); err != nil {
+			_ = os.Remove(tempPath)
+			return false, err
+		}
+	}
+	if err := installDownloadedUpdate(exe, tempPath); err != nil {
+		_ = os.Remove(tempPath)
+		return false, err
+	}
+	return true, nil
+}
+
+func resolveUpdateVersion(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" || target == "latest" {
+		return latestGitHubVersion()
+	}
+	version := normalizeVersion(target)
+	if version == "" || version == "dev" {
+		return "", fmt.Errorf("invalid update version: %s", target)
+	}
+	return version, nil
+}
+
+func latestGitHubVersion() (string, error) {
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/"+githubRepo+"/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "BetterTunnels/"+versionLabel(version))
+	client := http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("release lookup failed: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	var out struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	resolved := normalizeVersion(out.TagName)
+	if resolved == "" {
+		return "", errors.New("latest release did not include a valid tag")
+	}
+	return resolved, nil
+}
+
+func downloadReleaseAsset(rawURL, path string) error {
+	client := http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return downloadFromReleaseArchive(rawURL, path)
+	}
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("download failed: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+func downloadFromReleaseArchive(assetURL, path string) error {
+	archiveURL := archiveURLForAsset(assetURL)
+	client := http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(archiveURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("download failed: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	tmpArchive := path + ".zip"
+	out, err := os.OpenFile(tmpArchive, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	defer os.Remove(tmpArchive)
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return extractAssetFromZip(tmpArchive, releaseAssetName(), path)
+}
+
+func archiveURLForAsset(assetURL string) string {
+	parts := strings.Split(assetURL, "/")
+	if len(parts) < 2 {
+		return assetURL
+	}
+	tag := parts[len(parts)-2]
+	return strings.Join(parts[:len(parts)-1], "/") + "/btunnel-" + tag + ".zip"
+}
+
+func extractAssetFromZip(zipPath, assetName, outputPath string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if filepath.Base(file.Name) != assetName {
+			continue
+		}
+		input, err := file.Open()
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		out, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, input)
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+	return fmt.Errorf("asset %s was not found in release archive", assetName)
+}
+
+func verifyReleaseChecksum(checksumsURL, assetName, path string) error {
+	client := http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(checksumsURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("checksum lookup failed: %s %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	expected := checksumForAsset(string(raw), assetName)
+	if expected == "" {
+		return nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s", assetName)
+	}
+	return nil
+}
+
+func checksumForAsset(raw, assetName string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if filepath.Base(fields[1]) == assetName {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+func installDownloadedUpdate(exe, tempPath string) error {
+	if runtime.GOOS == "windows" {
+		return installDownloadedUpdateWindows(exe, tempPath)
+	}
+	backup := exe + ".old"
+	_ = os.Remove(backup)
+	if err := os.Rename(exe, backup); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, exe); err != nil {
+		_ = os.Rename(backup, exe)
+		return err
+	}
+	_ = os.Remove(backup)
+	return nil
+}
+
+func installDownloadedUpdateWindows(exe, tempPath string) error {
+	script := tempPath + ".cmd"
+	body := fmt.Sprintf("@echo off\r\nping 127.0.0.1 -n 3 > nul\r\nmove /Y %q %q > nul\r\ndel %%~f0\r\n", tempPath, exe)
+	if err := os.WriteFile(script, []byte(body), 0o600); err != nil {
+		return err
+	}
+	return exec.Command("cmd", "/C", "start", "", "/MIN", script).Start()
+}
+
+func releaseAssetName() string {
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	return fmt.Sprintf("btunnel-%s-%s%s", runtime.GOOS, runtime.GOARCH, ext)
+}
+
+func shouldUpdate(current, server string) bool {
+	current = normalizeVersion(current)
+	server = normalizeVersion(server)
+	if current == "" || server == "" || current == "dev" {
+		return false
+	}
+	return compareVersions(server, current) > 0
+}
+
+func normalizeVersion(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "v")
+	if value == "" {
+		return ""
+	}
+	return value
+}
+
+func compareVersions(left, right string) int {
+	leftParts := versionParts(left)
+	rightParts := versionParts(right)
+	for i := 0; i < 3; i++ {
+		if leftParts[i] > rightParts[i] {
+			return 1
+		}
+		if leftParts[i] < rightParts[i] {
+			return -1
+		}
+	}
+	return 0
+}
+
+func versionParts(value string) [3]int {
+	value = normalizeVersion(value)
+	var out [3]int
+	parts := strings.Split(value, ".")
+	for i := 0; i < len(parts) && i < len(out); i++ {
+		part := parts[i]
+		if idx := strings.IndexFunc(part, func(r rune) bool { return r < '0' || r > '9' }); idx >= 0 {
+			part = part[:idx]
+		}
+		n, _ := strconv.Atoi(part)
+		out[i] = n
+	}
+	return out
+}
+
+func versionLabel(value string) string {
+	value = normalizeVersion(value)
+	if value == "" {
+		return "unknown"
+	}
+	if value == "dev" {
+		return value
+	}
+	return "v" + value
 }

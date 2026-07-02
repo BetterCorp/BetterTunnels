@@ -36,6 +36,7 @@ jobs:
         working-directory: cli
       - name: Build CLI binaries
         run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
           mkdir -p dist/cli
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"
@@ -43,7 +44,7 @@ jobs:
             ext=""
             if [ "${os}" = "windows" ]; then ext=".exe"; fi
             out="dist/cli/btunnel-${os}-${arch}${ext}"
-            (cd cli && CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "../${out}" .)
+            (cd cli && CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "../${out}" .)
           done
           sha256sum dist/cli/* > dist/cli/SHA256SUMS
       - uses: actions/upload-artifact@v4
