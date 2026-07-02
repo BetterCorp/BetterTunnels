@@ -298,8 +298,8 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 
 		switch {
 		case f.Type == "tunnel.ready":
-			if maybeAutoUpdate(f.ServerVersion) {
-				_ = conn.Close(websocket.StatusGoingAway, "cli updated")
+			if handleVersionPolicy(f.ServerVersion) {
+				_ = conn.Close(websocket.StatusGoingAway, "cli update required")
 				close(closed)
 				os.Exit(0)
 			}
@@ -752,14 +752,35 @@ func loadDotEnv() {
 	}
 }
 
-func maybeAutoUpdate(serverVersion string) bool {
-	if !shouldUpdate(version, serverVersion) {
+func handleVersionPolicy(serverVersion string) bool {
+	policy := updatePolicy(version, serverVersion)
+	if policy.kind == updateNone {
 		return false
 	}
-	fmt.Printf("CLI update available: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
+
+	if policy.kind == updateOptional {
+		fmt.Printf("CLI update available: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
+		fmt.Println("You can update now or continue this session and update later.")
+		if !confirm("Update now?", false) {
+			return false
+		}
+	} else {
+		fmt.Printf("CLI update required: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
+		fmt.Println(policy.reason)
+		fmt.Println("This CLI cannot continue until it is updated. You can cancel the update, but the tunnel will close.")
+		if !confirm("Update now?", true) {
+			fmt.Println("Update cancelled. Tunnel connection closed.")
+			return true
+		}
+	}
+
 	updated, err := updateCLI(serverVersion)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Automatic CLI update failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "CLI update failed: %v\n", err)
+		if policy.kind == updateRequired {
+			fmt.Fprintln(os.Stderr, "Run `btunnel update` manually before starting a tunnel.")
+			return true
+		}
 		fmt.Fprintln(os.Stderr, "Run `btunnel update` manually after this session.")
 		return false
 	}
@@ -768,6 +789,63 @@ func maybeAutoUpdate(serverVersion string) bool {
 		return true
 	}
 	return false
+}
+
+type updateKind int
+
+const (
+	updateNone updateKind = iota
+	updateOptional
+	updateRequired
+)
+
+type versionPolicy struct {
+	kind   updateKind
+	reason string
+}
+
+func updatePolicy(current, server string) versionPolicy {
+	current = normalizeVersion(current)
+	server = normalizeVersion(server)
+	if current == "" || server == "" || current == "dev" {
+		return versionPolicy{}
+	}
+	currentParts := versionParts(current)
+	serverParts := versionParts(server)
+	if compareVersions(server, current) <= 0 {
+		return versionPolicy{}
+	}
+	if currentParts[0] != serverParts[0] {
+		return versionPolicy{
+			kind:   updateRequired,
+			reason: fmt.Sprintf("Major versions differ (%d vs %d).", currentParts[0], serverParts[0]),
+		}
+	}
+	minorDiff := serverParts[1] - currentParts[1]
+	if minorDiff >= 2 {
+		return versionPolicy{
+			kind:   updateRequired,
+			reason: fmt.Sprintf("Server is %d minor versions ahead.", minorDiff),
+		}
+	}
+	return versionPolicy{kind: updateOptional}
+}
+
+func confirm(prompt string, defaultYes bool) bool {
+	suffix := " [y/N]: "
+	if defaultYes {
+		suffix = " [Y/n]: "
+	}
+	fmt.Print(prompt + suffix)
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return defaultYes
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer == "" {
+		return defaultYes
+	}
+	return answer == "y" || answer == "yes"
 }
 
 func updateCLI(target string) (bool, error) {
@@ -1038,12 +1116,7 @@ func releaseAssetName() string {
 }
 
 func shouldUpdate(current, server string) bool {
-	current = normalizeVersion(current)
-	server = normalizeVersion(server)
-	if current == "" || server == "" || current == "dev" {
-		return false
-	}
-	return compareVersions(server, current) > 0
+	return updatePolicy(current, server).kind != updateNone
 }
 
 func normalizeVersion(value string) string {

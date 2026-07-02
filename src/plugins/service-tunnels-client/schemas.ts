@@ -5,6 +5,7 @@ export const TunnelCreateSchema = av.object({
   sessionId: av.string().minLength(1),
   targetHost: av.string().minLength(1).default("127.0.0.1"),
   targetPort: av.number(),
+  clientVersion: av.optional(av.string()),
   authenticated: av.bool().default(false),
   prefix: av.optional(av.string()),
   token: av.optional(av.string())

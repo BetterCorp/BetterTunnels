@@ -318,10 +318,22 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       sessionId: url.searchParams.get("sessionId") ?? "",
       targetHost: url.searchParams.get("targetHost") ?? "127.0.0.1",
       targetPort: Number(url.searchParams.get("targetPort") ?? "0"),
+      clientVersion: url.searchParams.get("clientVersion") ?? undefined,
       authenticated: url.searchParams.get("authenticated") === "true",
       prefix: url.searchParams.get("prefix") ?? undefined,
       token: url.searchParams.get("token") ?? undefined
     });
+
+    const versionIssue = incompatibleMajor(input.clientVersion, this.pluginPackageVersion);
+    if (versionIssue) {
+      ws.close(1008, versionIssue);
+      obs.log.warn("CLIENT SESSION rejected incompatible version client={clientVersion} server={serverVersion} from {clientIp}", {
+        clientVersion: input.clientVersion ?? "unknown",
+        serverVersion: this.pluginPackageVersion,
+        clientIp
+      });
+      return;
+    }
 
     const authContext = input.authenticated
       ? await validateDeviceToken(input.token, clientIp, Array.isArray(userAgent) ? userAgent.join(" ") : userAgent)
@@ -583,6 +595,23 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     clearTimeout(pending.firstByteTimer);
     if (pending.idleTimer) clearTimeout(pending.idleTimer);
   }
+}
+
+function incompatibleMajor(clientVersion: string | undefined, serverVersion: string): string | undefined {
+  const client = majorVersion(clientVersion);
+  const server = majorVersion(serverVersion);
+  if (client === undefined || server === undefined) return undefined;
+  if (client !== server) {
+    return `BetterTunnels CLI major version ${client} is incompatible with server major version ${server}. Update the CLI.`;
+  }
+  return undefined;
+}
+
+function majorVersion(value: string | undefined): number | undefined {
+  const normalized = value?.trim().replace(/^v/, "");
+  if (!normalized || normalized === "dev") return undefined;
+  const major = Number.parseInt(normalized.split(".")[0] ?? "", 10);
+  return Number.isFinite(major) ? major : undefined;
 }
 
 async function safeJson(request: Request): Promise<unknown> {
