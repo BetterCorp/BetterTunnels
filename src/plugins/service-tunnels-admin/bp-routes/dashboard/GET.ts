@@ -1,8 +1,24 @@
+import * as av from "anyvali";
+import type { Infer } from "anyvali";
 import { createHandler } from "@betterportal/framework";
 import { prisma } from "../../../../prisma.js";
-import { ResponseSchema } from "./index.js";
 
-export { ResponseSchema } from "./index.js";
+export const ResponseSchema = av.object({
+  activeTunnels: av.number(),
+  totalTunnels: av.number(),
+  anonymousAccounts: av.number(),
+  registeredAccounts: av.number(),
+  requests: av.number(),
+  bytesIn: av.number(),
+  bytesOut: av.number(),
+  recentAuditEvents: av.array(av.object({
+    id: av.string(),
+    event: av.string(),
+    subjectId: av.optional(av.string()),
+    createdAt: av.string()
+  }, { unknownKeys: "strip" }))
+}, { unknownKeys: "strip" });
+export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(
   { response: ResponseSchema },

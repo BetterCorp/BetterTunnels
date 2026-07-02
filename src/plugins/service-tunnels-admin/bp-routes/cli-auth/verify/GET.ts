@@ -1,14 +1,28 @@
+import * as av from "anyvali";
+import type { Infer } from "anyvali";
 import { createHandler } from "@betterportal/framework";
 import { hashSecret, verifySecret } from "../../../../../auth.js";
 import { prisma } from "../../../../../prisma.js";
-import { QuerySchema, ResponseSchema } from "./index.js";
 
-export { QuerySchema, ResponseSchema } from "./index.js";
+export const QuerySchema = av.object({
+  session: av.optional(av.string().minLength(1)),
+  key: av.optional(av.string().minLength(1))
+}, { unknownKeys: "strip" });
+
+export const ResponseSchema = av.object({
+  status: av.string(),
+  message: av.string()
+}, { unknownKeys: "strip" });
+export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(
   { query: QuerySchema, response: ResponseSchema },
   async (ctx) => {
-    const query = ctx.query as { session: string; key: string };
+    const query = ctx.query as { session?: string; key?: string };
+    if (!query.session || !query.key) {
+      return { status: "invalid", message: "This CLI authentication link is missing required session details." };
+    }
+
     const session = await prisma.clientAuthSession.findUnique({
       where: { id: query.session }
     });

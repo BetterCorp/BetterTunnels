@@ -1,8 +1,21 @@
+import * as av from "anyvali";
+import type { Infer } from "anyvali";
 import { createHandler } from "@betterportal/framework";
 import { loadBrandAssets } from "../../brand-assets.js";
-import { ResponseSchema } from "./index.js";
 
-export { ResponseSchema } from "./index.js";
+const DownloadSchema = av.object({
+  os: av.string(),
+  arch: av.string(),
+  artifact: av.string()
+}, { unknownKeys: "strip" });
+
+export const ResponseSchema = av.object({
+  latestTag: av.string(),
+  logoUrl: av.string(),
+  examples: av.array(av.string()),
+  downloads: av.array(DownloadSchema)
+}, { unknownKeys: "strip" });
+export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(
   { response: ResponseSchema },

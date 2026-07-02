@@ -1,6 +1,6 @@
 /** @jsxImportSource jsx-htmx */
 import type { HtmlRenderable } from "@betterportal/framework";
-import type { ResponseData } from "../index.js";
+import type { ResponseData } from "../GET.js";
 
 export function render(data: ResponseData): HtmlRenderable {
   return (

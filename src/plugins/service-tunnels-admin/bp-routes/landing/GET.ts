@@ -1,8 +1,24 @@
+import * as av from "anyvali";
+import type { Infer } from "anyvali";
 import { createHandler } from "@betterportal/framework";
 import { loadBrandAssets } from "../../brand-assets.js";
-import { ResponseSchema } from "./index.js";
 
-export { ResponseSchema } from "./index.js";
+export const ResponseSchema = av.object({
+  product: av.string(),
+  domain: av.string(),
+  connectHost: av.string(),
+  webHost: av.string(),
+  logoUrl: av.string(),
+  markUrl: av.string(),
+  faviconUrl: av.string(),
+  cliInstall: av.array(av.string()),
+  highlights: av.array(av.object({
+    title: av.string(),
+    body: av.string()
+  }, { unknownKeys: "strip" })),
+  limits: av.array(av.string())
+}, { unknownKeys: "strip" });
+export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(
   { response: ResponseSchema },

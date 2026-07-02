@@ -1,5 +1,3 @@
-import * as av from "anyvali";
-import type { Infer } from "anyvali";
 import {
   type ApiAuthRequirement,
   type CacheHints
@@ -18,17 +16,3 @@ export const cacheHints: CacheHints = {
   ttlSeconds: 60,
   varyBy: ["accept", "x-bp-tenant-id", "x-bp-app-id"]
 };
-
-const DownloadSchema = av.object({
-  os: av.string(),
-  arch: av.string(),
-  artifact: av.string()
-}, { unknownKeys: "strip" });
-
-export const ResponseSchema = av.object({
-  latestTag: av.string(),
-  logoUrl: av.string(),
-  examples: av.array(av.string()),
-  downloads: av.array(DownloadSchema)
-}, { unknownKeys: "strip" });
-export type ResponseData = Infer<typeof ResponseSchema>;

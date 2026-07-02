@@ -1,6 +1,6 @@
 /** @jsxImportSource jsx-htmx */
 import type { HtmlRenderable } from "@betterportal/framework";
-import type { ResponseData } from "../index.js";
+import type { ResponseData } from "../GET.js";
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
