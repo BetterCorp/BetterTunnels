@@ -1,6 +1,6 @@
 {
   "name": "@betterportal/tunnels",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "license": "(AGPL-3.0-only OR Commercial)",
   "repository": {
@@ -37,8 +37,8 @@
     "check": "npm run build && npm test"
   },
   "dependencies": {
-    "@betterportal/framework": "^10.0.29",
-    "@betterportal/plugin-bsb": "^10.0.29",
+    "@betterportal/framework": "^10.0.30",
+    "@betterportal/plugin-bsb": "^10.0.30",
     "@bsb/base": "^9.6.41",
     "@bsb/config-vault": "^9.6.47",
     "@prisma/adapter-pg": "^7.8.0",
