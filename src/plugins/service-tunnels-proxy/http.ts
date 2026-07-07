@@ -50,6 +50,14 @@ function isPrivateIp(ip: string): boolean {
     || ip.startsWith("fe80:");
 }
 
+// Response() throws on null-body statuses with a body, and on statuses outside 200-599.
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+export function buildProxyResponse(body: Buffer, status: number, headers: HeadersInit): Response {
+  const safeStatus = status >= 200 && status <= 599 ? status : 502;
+  return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : new Uint8Array(body), { status: safeStatus, headers });
+}
+
 export function tunnelUnavailable(headers: Headers, status = 503): Response {
   const accept = headers.get("accept")?.toLowerCase() ?? "";
   const payload = {

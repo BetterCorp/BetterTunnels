@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { H3, getRequestURL, toNodeHandler } from "h3";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js";
-import { forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
+import { buildProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
 import { createVerificationFlow, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
 import { initializePrisma } from "../../prisma.js";
@@ -197,10 +197,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
           return tunnelUnavailable(event.req.headers);
         }
 
-        return new Response(Buffer.from(response.body, "base64"), {
-          status: response.status,
-          headers: response.headers
-        });
+        return buildProxyResponse(Buffer.from(response.body, "base64"), response.status, response.headers);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         requestObs.error(error instanceof Error ? error : new Error(message), {

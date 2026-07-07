@@ -583,10 +583,11 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       this.clearPendingTimers(pending);
       tunnel.pending.delete(frame.requestId);
       const buffer = Buffer.concat(pending.chunks.map((chunk) => Buffer.from(chunk, "base64")));
-      pending.resolve(new Response(buffer, {
-        status: pending.status ?? 200,
-        headers: stripResponseHeaders(pending.headers ?? {})
-      }));
+      try {
+        pending.resolve(buildProxyResponse(buffer, pending.status ?? 200, stripResponseHeaders(pending.headers ?? {})));
+      } catch (error) {
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      }
       return;
     }
 
@@ -649,6 +650,14 @@ async function loadPluginPackageVersion(packageCwd: string): Promise<string> {
   } catch {
     return "0.0.0";
   }
+}
+
+// Response() throws on null-body statuses with a body, and on statuses outside 200-599.
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+export function buildProxyResponse(body: Buffer, status: number, headers: HeadersInit): Response {
+  const safeStatus = status >= 200 && status <= 599 ? status : 502;
+  return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : new Uint8Array(body), { status: safeStatus, headers });
 }
 
 function json(value: unknown, status = 200): Response {
