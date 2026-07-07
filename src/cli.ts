@@ -113,13 +113,13 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
       alive = true;
     });
     ws.on("error", (error) => {
-      console.error(`Tunnel socket error for ${config.host}:${config.port}: ${error.message}`);
+      console.error(`Tunnel server unreachable for ${config.host}:${config.port} (server-side issue, your local service is fine): ${error.message}`);
     });
     ws.on("close", (code, reason) => {
       clearInterval(heartbeat);
       for (const origin of originSockets.values()) origin.close();
       originSockets.clear();
-      console.warn(`Tunnel closed for ${config.host}:${config.port}: code=${code} reason=${reason.toString() || "none"}`);
+      console.warn(`Tunnel server connection lost for ${config.host}:${config.port} (server-side, your local service is fine): code=${code} reason=${reason.toString() || "none"}`);
       if (!reconnect || code === 1002 || code === 1008) return;
       const delay = retryDelay(++attempt);
       console.warn(`Reconnecting ${config.host}:${config.port} in ${delay / 1000}s...`);
@@ -403,5 +403,5 @@ function fmt(value: number | undefined): string {
 }
 
 function retryDelay(attempt: number): number {
-  return [1_000, 2_000, 5_000, 10_000, 30_000][Math.min(attempt - 1, 4)] ?? 30_000;
+  return [1_000, 2_000, 3_000, 5_000][Math.min(attempt - 1, 3)] ?? 5_000;
 }

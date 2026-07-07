@@ -352,7 +352,7 @@ func startTunnel(config tunnelConfig) error {
 func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (code int, retry bool, ready bool) {
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Tunnel socket error for %s:%d: %v\n", config.Host, config.Port, err)
+		fmt.Fprintf(os.Stderr, "Tunnel server unreachable for %s:%d (server-side issue, your local service is fine): %v\n", config.Host, config.Port, err)
 		return 0, true, false
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
@@ -396,7 +396,7 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			}
 			originMu.Unlock()
 			code := int(websocket.CloseStatus(err))
-			fmt.Printf("Tunnel closed for %s:%d: code=%d reason=%s\n", config.Host, config.Port, code, closeReason(err))
+			fmt.Printf("Tunnel server connection lost for %s:%d (server-side, your local service is fine): code=%d reason=%s\n", config.Host, config.Port, code, closeReason(err))
 			return code, true, ready
 		}
 
@@ -762,7 +762,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 }
 
 func retryDelay(attempt int) time.Duration {
-	delays := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
+	delays := []time.Duration{time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second}
 	if attempt < 1 {
 		return delays[0]
 	}
