@@ -13,15 +13,18 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -45,6 +48,13 @@ type tunnelConfig struct {
 	Port       int    `json:"port"`
 	Prefix     string `json:"prefix,omitempty"`
 	HostHeader string `json:"host_header,omitempty"`
+	// Orchestration fields, used by `btunnel up` entries only.
+	Name         string `json:"name,omitempty"`
+	Run          string `json:"run,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	Dir          string `json:"dir,omitempty"`
+	Health       string `json:"health,omitempty"`
+	ReadyTimeout int    `json:"ready_timeout,omitempty"`
 }
 
 type fileConfig struct {
@@ -144,29 +154,115 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 		var cfg fileConfig
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			return err
 		}
-		for _, tunnel := range cfg.Tunnels {
-			t := withDefaults(tunnel)
-			go func() {
+		if len(cfg.Tunnels) == 0 {
+			return errors.New("no tunnels defined in .bettertunnel.json")
+		}
+		for i, t := range cfg.Tunnels {
+			label := entryLabel(t, i)
+			if t.Run != "" && t.Dir != "" {
+				return fmt.Errorf("tunnel %s: run and dir are mutually exclusive", label)
+			}
+			if t.Dir == "" && t.Port == 0 {
+				return fmt.Errorf("tunnel %s: port is required unless dir is set", label)
+			}
+			if t.Cwd != "" && t.Run == "" {
+				return fmt.Errorf("tunnel %s: cwd requires run", label)
+			}
+		}
+		var childMu sync.Mutex
+		var children []*exec.Cmd
+		var shuttingDown atomic.Bool
+		killChildren := func() {
+			shuttingDown.Store(true)
+			childMu.Lock()
+			defer childMu.Unlock()
+			for _, c := range children {
+				killTree(c)
+			}
+			children = nil
+		}
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		go func() {
+			<-sig
+			killChildren()
+			os.Exit(0)
+		}()
+		for i := range cfg.Tunnels {
+			t := withDefaults(cfg.Tunnels[i])
+			label := entryLabel(t, i)
+			if t.Dir != "" {
+				t.Host = "127.0.0.1"
+				p, err := serveStatic(t.Dir, t.Port)
+				if err != nil {
+					killChildren()
+					return fmt.Errorf("tunnel %s: %w", label, err)
+				}
+				t.Port = p
+			}
+			if t.Run != "" {
+				cmd := shellCommand(t.Run)
+				cmd.Dir = t.Cwd
+				cmd.Stdout = &lineWriter{prefix: label, out: os.Stdout}
+				cmd.Stderr = &lineWriter{prefix: label, out: os.Stderr}
+				fmt.Printf("[%s] starting: %s\n", label, t.Run)
+				if err := cmd.Start(); err != nil {
+					killChildren()
+					return fmt.Errorf("tunnel %s: %w", label, err)
+				}
+				childMu.Lock()
+				children = append(children, cmd)
+				childMu.Unlock()
+				go func(c *exec.Cmd, l string) {
+					err := c.Wait()
+					if shuttingDown.Load() {
+						return
+					}
+					fmt.Fprintf(os.Stderr, "[%s] service exited: %v\n", l, err)
+					killChildren()
+					os.Exit(1)
+				}(cmd, label)
+			}
+			needsReady := t.Run != "" || t.Health != ""
+			go func(t tunnelConfig, l string, wait bool) {
+				if wait {
+					if err := waitReady(t, l); err != nil {
+						fmt.Fprintln(os.Stderr, err)
+						killChildren()
+						os.Exit(1)
+					}
+				}
 				if err := startTunnel(t); err != nil {
 					fmt.Fprintln(os.Stderr, err)
 				}
-			}()
+			}(t, label, needsReady)
 		}
 		select {}
 	case "host":
-		if len(args) >= 2 && args[1] == "--dev" {
-			if len(args) < 4 {
-				return errors.New("usage: btunnel host --dev <port> <command...>")
+		rest := args[1:]
+		if len(rest) >= 1 && rest[0] == "--dev" {
+			rest = rest[1:]
+			port := 0
+			for len(rest) > 0 && strings.HasPrefix(rest[0], "--") {
+				p, consumed, err := parsePortFlag(rest)
+				if err != nil {
+					return err
+				}
+				if consumed == 0 {
+					return fmt.Errorf("unknown flag %s", rest[0])
+				}
+				port = p
+				rest = rest[consumed:]
 			}
-			port, err := strconv.Atoi(args[2])
-			if err != nil {
-				return err
+			if port == 0 || len(rest) == 0 {
+				return errors.New("usage: btunnel host --dev --port <port> <command...>")
 			}
-			cmd := shellCommand(strings.Join(args[3:], " "))
+			cmd := shellCommand(strings.Join(rest, " "))
 			cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 			if err := cmd.Start(); err != nil {
 				return err
@@ -177,21 +273,34 @@ func run(args []string) error {
 			}()
 			return startTunnel(tunnelConfig{Host: "127.0.0.1", Port: port})
 		}
-		if len(args) < 2 {
-			return errors.New("usage: btunnel host <dir> [port]")
-		}
-		port := 4173
-		if len(args) > 2 {
-			p, err := strconv.Atoi(args[2])
-			if err != nil {
-				return err
+		port := 0
+		dir := ""
+		for i := 0; i < len(rest); i++ {
+			if strings.HasPrefix(rest[i], "--") {
+				p, consumed, err := parsePortFlag(rest[i:])
+				if err != nil {
+					return err
+				}
+				if consumed == 0 {
+					return fmt.Errorf("unknown flag %s", rest[i])
+				}
+				port = p
+				i += consumed - 1
+				continue
 			}
-			port = p
+			if dir != "" {
+				return errors.New("usage: btunnel host <dir> [--port <port>]")
+			}
+			dir = rest[i]
 		}
-		if err := serveStatic(args[1], port); err != nil {
+		if dir == "" {
+			return errors.New("usage: btunnel host <dir> [--port <port>]")
+		}
+		actualPort, err := serveStatic(dir, port)
+		if err != nil {
 			return err
 		}
-		return startTunnel(tunnelConfig{Host: "127.0.0.1", Port: port})
+		return startTunnel(tunnelConfig{Host: "127.0.0.1", Port: actualPort})
 	default:
 		usage()
 		return nil
@@ -226,9 +335,12 @@ func startTunnel(config tunnelConfig) error {
 
 	attempt := 0
 	for {
-		code, retry := connectTunnel(context.Background(), u.String(), serverURL, config)
+		code, retry, ready := connectTunnel(context.Background(), u.String(), serverURL, config)
 		if !retry || code == int(websocket.StatusProtocolError) || code == int(websocket.StatusPolicyViolation) {
 			return nil
+		}
+		if ready {
+			attempt = 0
 		}
 		attempt++
 		delay := retryDelay(attempt)
@@ -237,11 +349,11 @@ func startTunnel(config tunnelConfig) error {
 	}
 }
 
-func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (int, bool) {
+func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (code int, retry bool, ready bool) {
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Tunnel socket error for %s:%d: %v\n", config.Host, config.Port, err)
-		return 0, true
+		return 0, true, false
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
@@ -285,7 +397,7 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			originMu.Unlock()
 			code := int(websocket.CloseStatus(err))
 			fmt.Printf("Tunnel closed for %s:%d: code=%d reason=%s\n", config.Host, config.Port, code, closeReason(err))
-			return code, true
+			return code, true, ready
 		}
 
 		var f frame
@@ -293,11 +405,12 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			fmt.Fprintf(os.Stderr, "Tunnel protocol error for %s:%d: %v\n", config.Host, config.Port, err)
 			_ = conn.Close(websocket.StatusProtocolError, "protocol error")
 			close(closed)
-			return int(websocket.StatusProtocolError), false
+			return int(websocket.StatusProtocolError), false, ready
 		}
 
 		switch {
 		case f.Type == "tunnel.ready":
+			ready = true
 			if handleVersionPolicy(f.ServerVersion) {
 				_ = conn.Close(websocket.StatusGoingAway, "cli update required")
 				close(closed)
@@ -457,10 +570,36 @@ func handleOriginWS(ctx context.Context, writer *wsWriter, mu *sync.Mutex, socke
 	}
 }
 
-func serveStatic(root string, port int) error {
+// parsePortFlag reads a leading --port <n> or --port=<n> from args.
+// Returns consumed=0 when args[0] is not a port flag.
+func parsePortFlag(args []string) (port int, consumed int, err error) {
+	switch {
+	case args[0] == "--port":
+		if len(args) < 2 {
+			return 0, 0, errors.New("--port requires a value")
+		}
+		p, err := strconv.Atoi(args[1])
+		if err != nil || p < 1 || p > 65535 {
+			return 0, 0, fmt.Errorf("invalid --port value: %s", args[1])
+		}
+		return p, 2, nil
+	case strings.HasPrefix(args[0], "--port="):
+		raw := strings.TrimPrefix(args[0], "--port=")
+		p, err := strconv.Atoi(raw)
+		if err != nil || p < 1 || p > 65535 {
+			return 0, 0, fmt.Errorf("invalid --port value: %s", raw)
+		}
+		return p, 1, nil
+	}
+	return 0, 0, nil
+}
+
+// serveStatic serves root on 127.0.0.1. port 0 picks a free port.
+// Returns the port actually bound.
+func serveStatic(root string, port int) (int, error) {
 	base, err := filepath.Abs(root)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
@@ -484,14 +623,21 @@ func serveStatic(root string, port int) error {
 		}
 		http.ServeFile(w, r, file)
 	})
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		if port == 0 {
+			return 0, fmt.Errorf("cannot start local server: %w", err)
+		}
+		return 0, fmt.Errorf("cannot host on port %d: %w", port, err)
+	}
+	actual := ln.Addr().(*net.TCPAddr).Port
 	go func() {
-		err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port), handler)
-		if err != nil {
+		if err := http.Serve(ln, handler); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	}()
-	fmt.Printf("Static: http://127.0.0.1:%d\n", port)
-	return nil
+	fmt.Printf("Static: http://127.0.0.1:%d\n", actual)
+	return actual, nil
 }
 
 func parseTarget(target string) (tunnelConfig, error) {
@@ -521,6 +667,98 @@ func shellCommand(command string) *exec.Cmd {
 		return exec.Command("cmd", "/C", command)
 	}
 	return exec.Command("sh", "-c", command)
+}
+
+func entryLabel(t tunnelConfig, i int) string {
+	if t.Name != "" {
+		return t.Name
+	}
+	if t.Dir != "" {
+		return t.Dir
+	}
+	if t.Port != 0 {
+		return fmt.Sprintf("%s:%d", withDefaults(t).Host, t.Port)
+	}
+	return fmt.Sprintf("tunnel[%d]", i)
+}
+
+// waitReady blocks until the target accepts a TCP connection, or when
+// t.Health is set, until GET http://host:port<health> returns < 400.
+func waitReady(t tunnelConfig, label string) error {
+	timeout := time.Duration(t.ReadyTimeout) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	target := net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+	healthURL := ""
+	if t.Health != "" {
+		path := t.Health
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		healthURL = fmt.Sprintf("http://%s%s", target, path)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	for {
+		if healthURL != "" {
+			resp, err := client.Get(healthURL)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode < 400 {
+					fmt.Printf("[%s] ready: %s -> %d\n", label, healthURL, resp.StatusCode)
+					return nil
+				}
+			}
+		} else {
+			conn, err := net.DialTimeout("tcp", target, time.Second)
+			if err == nil {
+				_ = conn.Close()
+				fmt.Printf("[%s] ready: tcp %s\n", label, target)
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("[%s] not ready after %s (%s)", label, timeout, target)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// killTree stops a child process including descendants spawned by its shell.
+func killTree(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		return
+	}
+	_ = cmd.Process.Kill()
+}
+
+// lineWriter prefixes each output line with the service label.
+type lineWriter struct {
+	mu     sync.Mutex
+	prefix string
+	out    io.Writer
+	buf    []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := strings.TrimRight(string(w.buf[:i]), "\r")
+		fmt.Fprintf(w.out, "[%s] %s\n", w.prefix, line)
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
 }
 
 func retryDelay(attempt int) time.Duration {
@@ -560,8 +798,8 @@ func usage() {
 	fmt.Println("usage: btunnel version")
 	fmt.Println("usage: btunnel update [version]")
 	fmt.Println("usage: btunnel http <port|host:port>")
-	fmt.Println("       btunnel host <dir> [port]")
-	fmt.Println("       btunnel host --dev <port> <command...>")
+	fmt.Println("       btunnel host <dir> [--port <port>]")
+	fmt.Println("       btunnel host --dev --port <port> <command...>")
 	fmt.Println("       btunnel up")
 }
 

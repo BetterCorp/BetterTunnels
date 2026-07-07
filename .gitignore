@@ -11,3 +11,4 @@ src/generated/
 bsb-tests.json
 .bp-bootstrap/
 .bp-sync-cache/
+.ai/

@@ -345,8 +345,24 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     }
 
     const authenticated = !!authContext;
-    const prefix = authenticated && input.prefix ? input.prefix : randomPrefix();
-    const subdomain = buildTunnelSubdomain(prefix, input.targetPort, clientIp);
+    let subdomain: string | undefined;
+    if (!(authenticated && input.prefix)) {
+      // Reuse the prior subdomain for this session so reconnects keep the same public URL.
+      const prior = await prisma.tunnel.findFirst({
+        where: {
+          sessionId: input.sessionId,
+          targetHost: input.targetHost,
+          targetPort: input.targetPort,
+          expiresAt: { gt: new Date() }
+        },
+        orderBy: { expiresAt: "desc" }
+      });
+      subdomain = prior?.subdomain;
+    }
+    if (!subdomain) {
+      const prefix = authenticated && input.prefix ? input.prefix : randomPrefix();
+      subdomain = buildTunnelSubdomain(prefix, input.targetPort, clientIp);
+    }
     const expiresAt = new Date(Date.now() + (authenticated ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
     const sessionObs = this.createTrace("bt.client.session", {
       "bt.client.session_id": input.sessionId,
@@ -428,8 +444,11 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       for (const [requestId, pending] of tunnel.pending.entries()) {
         this.failPending(tunnel, requestId, pending, new Error("Tunnel client disconnected."));
       }
-      this.registry.delete(subdomain);
-      void prisma.tunnel.update({ where: { id: tunnel.id }, data: { status: "disconnected" } }).catch(() => undefined);
+      // A reconnect may already own this subdomain; only tear down if this socket is still the registered one.
+      if (this.registry.get(subdomain)?.ws === ws) {
+        this.registry.delete(subdomain);
+        void prisma.tunnel.update({ where: { id: tunnel.id }, data: { status: "disconnected" } }).catch(() => undefined);
+      }
       sessionObs.end({ "bt.client.disconnect": true });
       sessionObs.log.warn("CLIENT TUNNEL socket closed {subdomain} code={code} reason={reason}", {
         subdomain,

@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
+import { connect as netConnect } from "node:net";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import WebSocket, { type RawData } from "ws";
-import { FileConfigSchema, TunnelConfigSchema, ClientFrameSchema } from "./plugins/service-tunnels-client/schemas.js";
+import { FileConfigSchema, TunnelConfigSchema, ClientFrameSchema, type TunnelEntry } from "./plugins/service-tunnels-client/schemas.js";
 
 const serverUrl = process.env.BETTER_TUNNELS_SERVER ?? "wss://connect.tunnels.betterportal.dev";
 const sessionId = randomUUID();
@@ -24,22 +25,57 @@ async function main(): Promise<void> {
     const host = target.includes(":") ? target.split(":").slice(0, -1).join(":") : "127.0.0.1";
     await startTunnel(TunnelConfigSchema.parse({ host, port }));
   } else if (command === "up") {
-    const cfg = FileConfigSchema.parse(JSON.parse(await readFile(".bettertunnel.json", "utf8")));
-    await Promise.all(cfg.tunnels.map((tunnel) => startTunnel(tunnel)));
+    const rawConfig = (await readFile(".bettertunnel.json", "utf8")).replace(/^﻿/, "");
+    const cfg = FileConfigSchema.parse(JSON.parse(rawConfig));
+    if (cfg.tunnels.length === 0) throw new Error("no tunnels defined in .bettertunnel.json");
+    for (const [i, t] of cfg.tunnels.entries()) {
+      const label = entryLabel(t, i);
+      if (t.run && t.dir) throw new Error(`tunnel ${label}: run and dir are mutually exclusive`);
+      if (!t.dir && !t.port) throw new Error(`tunnel ${label}: port is required unless dir is set`);
+      if (t.cwd && !t.run) throw new Error(`tunnel ${label}: cwd requires run`);
+    }
+    const children: ReturnType<typeof spawn>[] = [];
+    let shuttingDown = false;
+    const killAll = () => { shuttingDown = true; for (const child of children) child.kill(); };
+    process.on("SIGINT", () => { killAll(); process.exit(0); });
+    await Promise.all(cfg.tunnels.map(async (entry, i) => {
+      const label = entryLabel(entry, i);
+      const t = { ...entry };
+      if (t.dir) {
+        t.host = "127.0.0.1";
+        t.port = await serveStatic(t.dir, t.port ?? 0);
+      }
+      if (t.run) {
+        const child = spawn(t.run, [], { shell: true, cwd: t.cwd, stdio: ["ignore", "pipe", "pipe"] });
+        child.stdout?.on("data", (chunk: Buffer) => process.stdout.write(prefixLines(label, chunk)));
+        child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(prefixLines(label, chunk)));
+        child.on("exit", (code) => {
+          if (shuttingDown) return;
+          console.error(`[${label}] service exited with code ${code}`);
+          killAll();
+          process.exit(1);
+        });
+        children.push(child);
+        console.log(`[${label}] starting: ${t.run}`);
+      }
+      if (t.run || t.health) await waitReady(t.host, t.port as number, t.health, t.ready_timeout, label);
+      await startTunnel({ host: t.host, port: t.port as number, prefix: t.prefix, host_header: t.host_header });
+    }));
   } else if (command === "host" && target === "--dev") {
-    const port = Number(args.shift());
-    if (!port || args.length === 0) throw new Error("usage: btunnel host --dev <port> <command...>");
-    const child = spawn(args.join(" "), [], { shell: true, stdio: "inherit" });
+    const leadingFlag = args[0] === "--port" || args[0]?.startsWith("--port=");
+    const { port, rest } = leadingFlag ? takePortFlag(args) : { port: undefined, rest: args };
+    if (!port || rest.length === 0) throw new Error("usage: btunnel host --dev --port <port> <command...>");
+    const child = spawn(rest.join(" "), [], { shell: true, stdio: "inherit" });
     child.on("exit", (code) => process.exit(code ?? 0));
     await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
-  } else if (command === "host" && target) {
-    const port = Number(args[0] ?? "4173");
-    await serveStatic(target, port);
-    await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port }));
+  } else if (command === "host" && target && !target.startsWith("--")) {
+    const { port } = takePortFlag(args);
+    const actualPort = await serveStatic(target, port ?? 0);
+    await startTunnel(TunnelConfigSchema.parse({ host: "127.0.0.1", port: actualPort }));
   } else {
     console.log("usage: btunnel http <port|host:port>");
-    console.log("       btunnel host <dir> [port]");
-    console.log("       btunnel host --dev <port> <command...>");
+    console.log("       btunnel host <dir> [--port <port>]");
+    console.log("       btunnel host --dev --port <port> <command...>");
     console.log("       btunnel up");
   }
 }
@@ -244,7 +280,65 @@ function localRequest(host: string, port: number, method: string, path: string, 
   });
 }
 
-async function serveStatic(root: string, port: number): Promise<void> {
+function entryLabel(t: TunnelEntry, i: number): string {
+  if (t.name) return t.name;
+  if (t.dir) return t.dir;
+  if (t.port) return `${t.host}:${t.port}`;
+  return `tunnel[${i}]`;
+}
+
+function prefixLines(label: string, chunk: Buffer): string {
+  return chunk
+    .toString()
+    .split("\n")
+    .filter((line, idx, all) => idx < all.length - 1 || line !== "")
+    .map((line) => `[${label}] ${line.replace(/\r$/, "")}\n`)
+    .join("");
+}
+
+async function waitReady(host: string, port: number, health: string | undefined, timeoutSec: number | undefined, label: string): Promise<void> {
+  const timeoutMs = (timeoutSec && timeoutSec > 0 ? timeoutSec : 30) * 1000;
+  const deadline = Date.now() + timeoutMs;
+  const healthUrl = health ? `http://${host}:${port}${health.startsWith("/") ? health : `/${health}`}` : undefined;
+  for (;;) {
+    if (healthUrl) {
+      const ok = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) }).then((r) => r.status < 400).catch(() => false);
+      if (ok) {
+        console.log(`[${label}] ready: ${healthUrl}`);
+        return;
+      }
+    } else {
+      const ok = await new Promise<boolean>((resolveProbe) => {
+        const socket = netConnect({ host, port, timeout: 1000 });
+        socket.once("connect", () => { socket.destroy(); resolveProbe(true); });
+        socket.once("error", () => resolveProbe(false));
+        socket.once("timeout", () => { socket.destroy(); resolveProbe(false); });
+      });
+      if (ok) {
+        console.log(`[${label}] ready: tcp ${host}:${port}`);
+        return;
+      }
+    }
+    if (Date.now() > deadline) throw new Error(`[${label}] not ready after ${timeoutMs / 1000}s (${host}:${port})`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+function takePortFlag(args: string[]): { port: number | undefined; rest: string[] } {
+  const rest = [...args];
+  let port: number | undefined;
+  const flagIndex = rest.findIndex((a) => a === "--port" || a.startsWith("--port="));
+  if (flagIndex !== -1) {
+    const flag = rest[flagIndex];
+    const raw = flag === "--port" ? rest[flagIndex + 1] : flag.slice("--port=".length);
+    port = Number(raw);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid --port value: ${raw}`);
+    rest.splice(flagIndex, flag === "--port" ? 2 : 1);
+  }
+  return { port, rest };
+}
+
+async function serveStatic(root: string, port: number): Promise<number> {
   const base = resolve(root);
   const server = createServer(async (req, res) => {
     try {
@@ -273,8 +367,14 @@ async function serveStatic(root: string, port: number): Promise<void> {
     }
   });
 
-  await new Promise<void>((resolveReady) => server.listen(port, "127.0.0.1", resolveReady));
-  console.log(`Static: http://127.0.0.1:${port}`);
+  await new Promise<void>((resolveReady, reject) => {
+    server.once("error", (err) => reject(new Error(`cannot host on port ${port}: ${err.message}`)));
+    server.listen(port, "127.0.0.1", resolveReady);
+  });
+  const address = server.address();
+  const actual = typeof address === "object" && address ? address.port : port;
+  console.log(`Static: http://127.0.0.1:${actual}`);
+  return actual;
 }
 
 function contentType(file: string): string {

@@ -505,8 +505,16 @@ Authenticated `.bettertunnel` behavior:
 
 CLI self-hosting behavior:
 
-- `btunnel host .` can serve a static directory and expose it publicly without a separate local server.
-- `btunnel host --dev <command>` can run a local dev server and expose its selected port.
+- `btunnel host .` can serve a static directory and expose it publicly without a separate local server. It picks a free local port automatically; `--port <port>` overrides, and startup fails fast if that port is unavailable (no tunnel is started).
+- `btunnel host --dev --port <port> <command...>` can run a local dev server and expose its selected port. `--port` is required because the dev command, not the CLI, owns the listener.
+- `btunnel up` reads `.bettertunnel.json`; each tunnel entry can optionally orchestrate its own service:
+  - `name`: label used for log prefixes and errors.
+  - `run`: shell command the CLI starts and owns (`port` required; killed as a tree on exit/ctrl-c; if it exits, all services stop and `up` exits non-zero).
+  - `cwd`: working directory for `run` (only valid with `run`).
+  - `dir`: static directory served by the CLI (mutually exclusive with `run`; `port` optional, auto-picks a free port).
+  - `health`: HTTP path polled until it returns < 400 before the tunnel connects; without it, `run` entries gate on TCP accept.
+  - `ready_timeout`: readiness timeout in seconds (default 30); on timeout everything stops and `up` exits non-zero.
+  - Note: `run` executes arbitrary shell commands from the repo config — same trust model as npm scripts.
 - HTTP websocket upgrades from visitors should pass through to the local target as websocket connections; no path-specific config required.
 - Websocket passthrough must use BSB stream/event ownership between `service-tunnels-proxy` and `service-tunnels-client`; do not emulate it with buffered request events.
 

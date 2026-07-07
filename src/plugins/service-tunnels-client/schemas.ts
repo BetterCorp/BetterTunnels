@@ -40,8 +40,22 @@ export const TunnelConfigSchema = av.object({
 }, { unknownKeys: "strip" });
 export type TunnelConfig = Infer<typeof TunnelConfigSchema>;
 
+export const TunnelEntrySchema = av.object({
+  host: av.string().minLength(1).default("127.0.0.1"),
+  port: av.optional(av.number()),
+  prefix: av.optional(av.string()),
+  host_header: av.optional(av.string()),
+  name: av.optional(av.string()),
+  run: av.optional(av.string()),
+  cwd: av.optional(av.string()),
+  dir: av.optional(av.string()),
+  health: av.optional(av.string()),
+  ready_timeout: av.optional(av.number())
+}, { unknownKeys: "strip" });
+export type TunnelEntry = Infer<typeof TunnelEntrySchema>;
+
 export const FileConfigSchema = av.object({
-  tunnels: av.array(TunnelConfigSchema).default([])
+  tunnels: av.array(TunnelEntrySchema).default([])
 }, { unknownKeys: "strip" });
 export type FileConfig = Infer<typeof FileConfigSchema>;
 
