@@ -892,6 +892,9 @@ func fetchServiceStatus(base, token string) (serviceStatusResponse, error) {
 	if resp.StatusCode >= 300 {
 		return serviceStatusResponse{}, fmt.Errorf("HTTP %s", resp.Status)
 	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.Contains(strings.ToLower(contentType), "json") {
+		return serviceStatusResponse{}, fmt.Errorf("status endpoint returned %s; server may need its client service updated", firstNonEmpty(contentType, "non-JSON response"))
+	}
 	var status serviceStatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return serviceStatusResponse{}, err
