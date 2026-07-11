@@ -78,5 +78,6 @@ export const AuthStatusResponseSchema = av.object({
   expiresAt: av.optional(av.string()),
   tenantId: av.optional(av.string()),
   bpUserSubject: av.optional(av.string()),
+  bpUserEmail: av.optional(av.string()),
   message: av.optional(av.string())
 }, { unknownKeys: "strip" });

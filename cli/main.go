@@ -41,6 +41,7 @@ type cliState struct {
 	ExpiresAt string `json:"expiresAt,omitempty"`
 	TenantID  string `json:"tenantId,omitempty"`
 	Subject   string `json:"bpUserSubject,omitempty"`
+	Email     string `json:"bpUserEmail,omitempty"`
 }
 
 type tunnelConfig struct {
@@ -122,6 +123,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "login":
 		return login()
+	case "status":
+		return status()
 	case "version":
 		fmt.Println(versionLabel(version))
 		return nil
@@ -795,6 +798,7 @@ func closeReason(err error) string {
 
 func usage() {
 	fmt.Println("usage: btunnel login")
+	fmt.Println("usage: btunnel status")
 	fmt.Println("usage: btunnel version")
 	fmt.Println("usage: btunnel update [version]")
 	fmt.Println("usage: btunnel http <port|host:port>")
@@ -816,7 +820,96 @@ type authStatusResponse struct {
 	ExpiresAt     string `json:"expiresAt,omitempty"`
 	TenantID      string `json:"tenantId,omitempty"`
 	BPUserSubject string `json:"bpUserSubject,omitempty"`
+	BPUserEmail   string `json:"bpUserEmail,omitempty"`
 	Message       string `json:"message,omitempty"`
+}
+
+type serviceStatusResponse struct {
+	Status         string `json:"status"`
+	ServerVersion  string `json:"serverVersion"`
+	TenantID       string `json:"tenantId,omitempty"`
+	BPUserSubject  string `json:"bpUserSubject,omitempty"`
+	TokenExpiresAt string `json:"tokenExpiresAt,omitempty"`
+}
+
+func status() error {
+	state, stateErr := loadState()
+	fmt.Printf("CLI\n  Version: %s\n", versionLabel(version))
+
+	base := clientHTTPBase()
+	if err := checkHealth(base); err != nil {
+		fmt.Printf("Tunnel server\n  Status: unavailable (%v)\n", err)
+	} else {
+		fmt.Println("Tunnel server\n  Status: healthy")
+	}
+
+	if stateErr != nil || state.Token == "" {
+		fmt.Println("Authentication\n  Status: not authenticated")
+		return nil
+	}
+	if state.ExpiresAt != "" {
+		if expires, err := time.Parse(time.RFC3339, state.ExpiresAt); err == nil && !expires.After(time.Now()) {
+			fmt.Printf("Authentication\n  Status: expired\n  User: %s\n", userLabel(state))
+			return nil
+		}
+	}
+
+	service, err := fetchServiceStatus(base, state.Token)
+	if err != nil {
+		fmt.Printf("Authentication\n  Status: unavailable (%v)\n  User: %s\n", err, userLabel(state))
+		return nil
+	}
+	fmt.Printf("Authentication\n  Status: authenticated\n  User: %s\n  Tenant: %s\n  Token expires: %s\n", firstNonEmpty(state.Email, service.BPUserSubject, state.Subject), firstNonEmpty(service.TenantID, state.TenantID), firstNonEmpty(service.TokenExpiresAt, state.ExpiresAt))
+	if service.ServerVersion != "" {
+		fmt.Printf("  Server version: %s\n", versionLabel(service.ServerVersion))
+	}
+	return nil
+}
+
+func checkHealth(base string) error {
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(base + "/health")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %s", resp.Status)
+	}
+	return nil
+}
+
+func fetchServiceStatus(base, token string) (serviceStatusResponse, error) {
+	req, err := http.NewRequest("GET", base+"/api/client/status", nil)
+	if err != nil {
+		return serviceStatusResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return serviceStatusResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return serviceStatusResponse{}, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	var status serviceStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return serviceStatusResponse{}, err
+	}
+	return status, nil
+}
+
+func userLabel(state cliState) string {
+	return firstNonEmpty(state.Email, state.Subject, "unknown")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return "unknown"
 }
 
 func login() error {
@@ -859,6 +952,7 @@ func login() error {
 				ExpiresAt: status.ExpiresAt,
 				TenantID:  status.TenantID,
 				Subject:   status.BPUserSubject,
+				Email:     status.BPUserEmail,
 			}); err != nil {
 				return err
 			}

@@ -195,6 +195,19 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       headers: { "content-type": "text/plain; charset=utf-8" }
     }));
 
+    this.app.get("/api/client/status", async (event) => {
+      const token = bearerToken(event.req.headers);
+      const auth = await validateDeviceToken(token, proxyClientIpFromHeaders(event.req.headers), event.req.headers.get("user-agent") ?? "");
+      if (!auth) return json({ status: "unauthenticated" }, 401);
+      return json({
+        status: "authenticated",
+        serverVersion: this.pluginPackageVersion,
+        tenantId: auth.tenantId,
+        bpUserSubject: auth.bpUserSubject,
+        tokenExpiresAt: auth.expiresAt.toISOString()
+      });
+    });
+
     this.app.post("/api/client/auth/start", async (event) => {
       const body = AuthStartRequestSchema.parse(await safeJson(event.req));
       const browserKey = shortBrowserKey();
@@ -281,7 +294,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         token: deviceToken,
         expiresAt: tokenExpiresAt.toISOString(),
         tenantId: session.tenantId,
-        bpUserSubject: session.bpUserSubject
+        bpUserSubject: session.bpUserSubject,
+        bpUserEmail: session.bpUserEmail ?? undefined
       }));
     });
 
@@ -673,7 +687,7 @@ function buildAuthUrl(base: string, path: string, browserKey: string): string {
   return url.toString();
 }
 
-async function validateDeviceToken(token: string | undefined, clientIp: string, userAgent: string): Promise<{ accountId?: string } | undefined> {
+async function validateDeviceToken(token: string | undefined, clientIp: string, userAgent: string): Promise<{ accountId?: string; tenantId: string; bpUserSubject: string; expiresAt: Date } | undefined> {
   if (!token) return undefined;
   const ipRange = normalizeIpRange(clientIp);
   if (!ipRange) return undefined;
@@ -689,7 +703,12 @@ async function validateDeviceToken(token: string | undefined, clientIp: string, 
     where: { id: row.id },
     data: { lastUsedAt: new Date() }
   });
-  return { accountId: row.accountId ?? undefined };
+  return {
+    accountId: row.accountId ?? undefined,
+    tenantId: row.tenantId,
+    bpUserSubject: row.bpUserSubject,
+    expiresAt: row.expiresAt
+  };
 }
 
 function proxyClientIp(headers: import("node:http").IncomingHttpHeaders): string {
