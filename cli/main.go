@@ -109,9 +109,20 @@ func (w *wsWriter) send(ctx context.Context, v any) error {
 
 func main() {
 	loadDotEnv()
+	checkStartupUpdate(os.Args[1:])
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+func checkStartupUpdate(args []string) {
+	if len(args) == 0 || (args[0] != "http" && args[0] != "host" && args[0] != "up") {
+		return
+	}
+	serverVersion, err := checkHealth(clientHTTPBase())
+	if err == nil {
+		printUpdateNotice(serverVersion)
 	}
 }
 
@@ -435,11 +446,6 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 		switch {
 		case f.Type == "tunnel.ready":
 			ready = true
-			if handleVersionPolicy(f.ServerVersion) {
-				_ = conn.Close(websocket.StatusGoingAway, "cli update required")
-				close(closed)
-				os.Exit(0)
-			}
 			fmt.Println("Tunnel active")
 			fmt.Printf("Local:  http://%s:%d\n", config.Host, config.Port)
 			fmt.Printf("Public: %s\n", f.PublicURL)
@@ -922,10 +928,15 @@ func status() error {
 	fmt.Printf("CLI\n  Version: %s\n", versionLabel(version))
 
 	base := clientHTTPBase()
-	if err := checkHealth(base); err != nil {
+	serverVersion, err := checkHealth(base)
+	if err != nil {
 		fmt.Printf("Tunnel server\n  Status: unavailable (%v)\n", err)
 	} else {
 		fmt.Println("Tunnel server\n  Status: healthy")
+		if serverVersion != "" {
+			fmt.Printf("  Server version: %s\n", versionLabel(serverVersion))
+			printUpdateNotice(serverVersion)
+		}
 	}
 
 	if stateErr != nil || state.Token == "" {
@@ -963,16 +974,28 @@ func printLimits(limits serviceLimits) {
 	fmt.Printf("Effective limits\n  Tunnel lifetime: %dh\n  Request timeout: %ds\n  Idle timeout: %ds\n  Custom prefixes: %s\n", limits.TunnelTTLHours, limits.RequestTimeoutSecs, limits.IdleTimeoutSecs, prefixes)
 }
 
-func checkHealth(base string) error {
+func checkHealth(base string) (string, error) {
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(base + "/health")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %s", resp.Status)
+		return "", fmt.Errorf("HTTP %s", resp.Status)
 	}
-	return nil
+	return normalizeVersion(resp.Header.Get("X-BetterTunnels-Version")), nil
+}
+
+func printUpdateNotice(serverVersion string) {
+	policy := updatePolicy(version, serverVersion)
+	if policy.kind == updateNone {
+		return
+	}
+	if policy.kind == updateRequired {
+		fmt.Printf("CLI update required: %s -> %s. Run `btunnel update` before starting a tunnel.\n", versionLabel(version), versionLabel(serverVersion))
+		return
+	}
+	fmt.Printf("CLI update available: %s -> %s. Run `btunnel update` when convenient.\n", versionLabel(version), versionLabel(serverVersion))
 }
 
 func fetchServiceStatus(base, token string) (serviceStatusResponse, error) {
@@ -1184,45 +1207,6 @@ func loadDotEnv() {
 	}
 }
 
-func handleVersionPolicy(serverVersion string) bool {
-	policy := updatePolicy(version, serverVersion)
-	if policy.kind == updateNone {
-		return false
-	}
-
-	if policy.kind == updateOptional {
-		fmt.Printf("CLI update available: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
-		fmt.Println("You can update now or continue this session and update later.")
-		if !confirm("Update now?", false) {
-			return false
-		}
-	} else {
-		fmt.Printf("CLI update required: %s -> %s\n", versionLabel(version), versionLabel(serverVersion))
-		fmt.Println(policy.reason)
-		fmt.Println("This CLI cannot continue until it is updated. You can cancel the update, but the tunnel will close.")
-		if !confirm("Update now?", true) {
-			fmt.Println("Update cancelled. Tunnel connection closed.")
-			return true
-		}
-	}
-
-	updated, err := updateCLI(serverVersion)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "CLI update failed: %v\n", err)
-		if policy.kind == updateRequired {
-			fmt.Fprintln(os.Stderr, "Run `btunnel update` manually before starting a tunnel.")
-			return true
-		}
-		fmt.Fprintln(os.Stderr, "Run `btunnel update` manually after this session.")
-		return false
-	}
-	if updated {
-		fmt.Println("BetterTunnels CLI updated. Restarting is required; exiting this session now.")
-		return true
-	}
-	return false
-}
-
 type updateKind int
 
 const (
@@ -1261,23 +1245,6 @@ func updatePolicy(current, server string) versionPolicy {
 		}
 	}
 	return versionPolicy{kind: updateOptional}
-}
-
-func confirm(prompt string, defaultYes bool) bool {
-	suffix := " [y/N]: "
-	if defaultYes {
-		suffix = " [Y/n]: "
-	}
-	fmt.Print(prompt + suffix)
-	var answer string
-	if _, err := fmt.Scanln(&answer); err != nil {
-		return defaultYes
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	if answer == "" {
-		return defaultYes
-	}
-	return answer == "y" || answer == "yes"
 }
 
 func updateCLI(target string) (bool, error) {

@@ -192,7 +192,10 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     const publicUrl = this.config.publicUrl;
 
     this.app.get("/health", () => new Response("ok\n", {
-      headers: { "content-type": "text/plain; charset=utf-8" }
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-bettertunnels-version": this.pluginPackageVersion
+      }
     }));
 
     this.app.get("/api/client/status", async (event) => {
