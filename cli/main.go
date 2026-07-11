@@ -48,6 +48,7 @@ type tunnelConfig struct {
 	Host       string `json:"host"`
 	Port       int    `json:"port"`
 	Prefix     string `json:"prefix,omitempty"`
+	Validation string `json:"validation,omitempty"`
 	HostHeader string `json:"host_header,omitempty"`
 	// Orchestration fields, used by `btunnel up` entries only.
 	Name         string `json:"name,omitempty"`
@@ -121,6 +122,9 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "help", "--help", "-h":
+		help()
+		return nil
 	case "login":
 		return login()
 	case "status":
@@ -151,6 +155,17 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		for rest := args[2:]; len(rest) > 0; {
+			validation, consumed, err := parseValidationFlag(rest)
+			if err != nil {
+				return err
+			}
+			if consumed == 0 {
+				return fmt.Errorf("unknown flag %s", rest[0])
+			}
+			cfg.Validation = validation
+			rest = rest[consumed:]
+		}
 		return startTunnel(cfg)
 	case "up":
 		raw, err := os.ReadFile(".bettertunnel.json")
@@ -167,6 +182,9 @@ func run(args []string) error {
 		}
 		for i, t := range cfg.Tunnels {
 			label := entryLabel(t, i)
+			if t.Validation != "" && t.Validation != "cookie" && t.Validation != "ip" {
+				return fmt.Errorf("tunnel %s: validation must be cookie or ip", label)
+			}
 			if t.Run != "" && t.Dir != "" {
 				return fmt.Errorf("tunnel %s: run and dir are mutually exclusive", label)
 			}
@@ -326,6 +344,9 @@ func startTunnel(config tunnelConfig) error {
 	q.Set("targetHost", config.Host)
 	q.Set("targetPort", strconv.Itoa(config.Port))
 	q.Set("clientVersion", version)
+	if config.Validation != "" {
+		q.Set("validation", config.Validation)
+	}
 	if config.Prefix != "" {
 		q.Set("prefix", config.Prefix)
 	}
@@ -597,6 +618,26 @@ func parsePortFlag(args []string) (port int, consumed int, err error) {
 	return 0, 0, nil
 }
 
+func parseValidationFlag(args []string) (string, int, error) {
+	value := ""
+	consumed := 0
+	switch {
+	case args[0] == "--validation":
+		if len(args) < 2 {
+			return "", 0, errors.New("--validation requires a value")
+		}
+		value, consumed = args[1], 2
+	case strings.HasPrefix(args[0], "--validation="):
+		value, consumed = strings.TrimPrefix(args[0], "--validation="), 1
+	default:
+		return "", 0, nil
+	}
+	if value != "cookie" && value != "ip" {
+		return "", 0, fmt.Errorf("invalid --validation value: %s (use cookie or ip)", value)
+	}
+	return value, consumed, nil
+}
+
 // serveStatic serves root on 127.0.0.1. port 0 picks a free port.
 // Returns the port actually bound.
 func serveStatic(root string, port int) (int, error) {
@@ -802,9 +843,45 @@ func usage() {
 	fmt.Println("usage: btunnel version")
 	fmt.Println("usage: btunnel update [version]")
 	fmt.Println("usage: btunnel http <port|host:port>")
+	fmt.Println("       btunnel http <port|host:port> [--validation cookie|ip]")
 	fmt.Println("       btunnel host <dir> [--port <port>]")
 	fmt.Println("       btunnel host --dev --port <port> <command...>")
 	fmt.Println("       btunnel up")
+	fmt.Println("       btunnel help")
+}
+
+func help() {
+	usage()
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  btunnel login                  Authenticate in your browser")
+	fmt.Println("  btunnel status                 Check CLI, server, auth, and limits")
+	fmt.Println("  btunnel http 3000              Expose localhost:3000")
+	fmt.Println("  btunnel http 127.0.0.1:8080    Expose a specific local target")
+	fmt.Println("  btunnel http 3000 --validation ip  Use IP + user-agent validation (authenticated only)")
+	fmt.Println("  btunnel up                     Start tunnels from .bettertunnel.json")
+	fmt.Println()
+	fmt.Println("Authentication:")
+	fmt.Println("  `login` stores a device token in the OS BetterTunnels config directory.")
+	fmt.Println("  The server validates the token on every authenticated tunnel connection")
+	fmt.Println("  for expiry, revocation, client IP range, and user-agent binding.")
+	fmt.Println("  `status` validates the saved token without displaying its secret value.")
+	fmt.Println("  Use `BETTER_TUNNELS_SERVER` to target a different API server.")
+	fmt.Println()
+	fmt.Println("Tunnel configuration (.bettertunnel.json):")
+	fmt.Println("  {\"tunnels\":[{\"host\":\"127.0.0.1\",\"port\":3000,\"prefix\":\"web\"}]}")
+	fmt.Println("  `prefix` is honored for authenticated tunnels and ignored for anonymous ones.")
+	fmt.Println("  `validation` accepts `cookie` (default) or `ip` (authenticated only).")
+	fmt.Println("  `host_header` overrides the Host header sent to the local service.")
+	fmt.Println("  `run`, `cwd`, `dir`, `health`, and `ready_timeout` configure `btunnel up` services.")
+	fmt.Println()
+	fmt.Println("Validation and URLs:")
+	fmt.Println("  Public URLs use the server's configured tunnel domain and generated prefix.")
+	fmt.Println("  Anonymous visitors use the server verification flow before tunnel access.")
+	fmt.Println("  Authenticated tunnels may set validation to `ip` in the CLI or config.")
+	fmt.Println("  `ip` uses IP + user-agent validation without requiring a browser cookie.")
+	fmt.Println("  Anonymous tunnels ignore this setting and always use cookie validation.")
+	fmt.Println("  There is no unvalidated mode.")
 }
 
 type authStartResponse struct {
@@ -825,11 +902,19 @@ type authStatusResponse struct {
 }
 
 type serviceStatusResponse struct {
-	Status         string `json:"status"`
-	ServerVersion  string `json:"serverVersion"`
-	TenantID       string `json:"tenantId,omitempty"`
-	BPUserSubject  string `json:"bpUserSubject,omitempty"`
-	TokenExpiresAt string `json:"tokenExpiresAt,omitempty"`
+	Status         string        `json:"status"`
+	ServerVersion  string        `json:"serverVersion"`
+	TenantID       string        `json:"tenantId,omitempty"`
+	BPUserSubject  string        `json:"bpUserSubject,omitempty"`
+	TokenExpiresAt string        `json:"tokenExpiresAt,omitempty"`
+	Limits         serviceLimits `json:"limits"`
+}
+
+type serviceLimits struct {
+	TunnelTTLHours     int  `json:"tunnelTtlHours"`
+	RequestTimeoutSecs int  `json:"requestTimeoutSeconds"`
+	IdleTimeoutSecs    int  `json:"idleTimeoutSeconds"`
+	CustomPrefixes     bool `json:"customPrefixes"`
 }
 
 func status() error {
@@ -845,11 +930,13 @@ func status() error {
 
 	if stateErr != nil || state.Token == "" {
 		fmt.Println("Authentication\n  Status: not authenticated")
+		printLimits(serviceLimits{TunnelTTLHours: 6, RequestTimeoutSecs: 60, IdleTimeoutSecs: 30})
 		return nil
 	}
 	if state.ExpiresAt != "" {
 		if expires, err := time.Parse(time.RFC3339, state.ExpiresAt); err == nil && !expires.After(time.Now()) {
 			fmt.Printf("Authentication\n  Status: expired\n  User: %s\n", userLabel(state))
+			printLimits(serviceLimits{TunnelTTLHours: 24, RequestTimeoutSecs: 300, IdleTimeoutSecs: 60, CustomPrefixes: true})
 			return nil
 		}
 	}
@@ -857,13 +944,23 @@ func status() error {
 	service, err := fetchServiceStatus(base, state.Token)
 	if err != nil {
 		fmt.Printf("Authentication\n  Status: unavailable (%v)\n  User: %s\n", err, userLabel(state))
+		printLimits(serviceLimits{TunnelTTLHours: 24, RequestTimeoutSecs: 300, IdleTimeoutSecs: 60, CustomPrefixes: true})
 		return nil
 	}
 	fmt.Printf("Authentication\n  Status: authenticated\n  User: %s\n  Tenant: %s\n  Token expires: %s\n", firstNonEmpty(state.Email, service.BPUserSubject, state.Subject), firstNonEmpty(service.TenantID, state.TenantID), firstNonEmpty(service.TokenExpiresAt, state.ExpiresAt))
 	if service.ServerVersion != "" {
 		fmt.Printf("  Server version: %s\n", versionLabel(service.ServerVersion))
 	}
+	printLimits(service.Limits)
 	return nil
+}
+
+func printLimits(limits serviceLimits) {
+	prefixes := "no"
+	if limits.CustomPrefixes {
+		prefixes = "yes"
+	}
+	fmt.Printf("Effective limits\n  Tunnel lifetime: %dh\n  Request timeout: %ds\n  Idle timeout: %ds\n  Custom prefixes: %s\n", limits.TunnelTTLHours, limits.RequestTimeoutSecs, limits.IdleTimeoutSecs, prefixes)
 }
 
 func checkHealth(base string) error {

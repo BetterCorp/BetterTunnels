@@ -59,7 +59,7 @@ async function main(): Promise<void> {
         console.log(`[${label}] starting: ${t.run}`);
       }
       if (t.run || t.health) await waitReady(t.host, t.port as number, t.health, t.ready_timeout, label);
-      await startTunnel({ host: t.host, port: t.port as number, prefix: t.prefix, host_header: t.host_header });
+      await startTunnel({ host: t.host, port: t.port as number, prefix: t.prefix, validation: t.validation, host_header: t.host_header });
     }));
   } else if (command === "host" && target === "--dev") {
     const leadingFlag = args[0] === "--port" || args[0]?.startsWith("--port=");
@@ -80,12 +80,13 @@ async function main(): Promise<void> {
   }
 }
 
-async function startTunnel(config: { host: string; port: number; prefix?: string; host_header?: string }): Promise<void> {
+async function startTunnel(config: { host: string; port: number; prefix?: string; validation?: string; host_header?: string }): Promise<void> {
   const url = new URL("/api/client/ws", serverUrl);
   url.searchParams.set("sessionId", sessionId);
   url.searchParams.set("targetHost", config.host);
   url.searchParams.set("targetPort", String(config.port));
   if (config.prefix) url.searchParams.set("prefix", config.prefix);
+  if (config.validation) url.searchParams.set("validation", config.validation);
 
   let attempt = 0;
   const connect = () => {

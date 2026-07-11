@@ -131,7 +131,15 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         return this.verification.handleVerificationHost(event, url, clientIp, userAgent);
       }
 
-      const verificationResponse = this.verification.enforce(event, url, clientIp, userAgent);
+      const subdomain = url.hostname.split(".")[0] ?? "";
+      const tunnel = await prisma.tunnel.findUnique({
+        where: { subdomain },
+        select: { validation: true, session: { select: { ipHash: true, userAgent: true } } }
+      });
+      const identity = tunnel?.session.ipHash && tunnel.session.userAgent
+        ? { ipHash: tunnel.session.ipHash, userAgent: tunnel.session.userAgent }
+        : undefined;
+      const verificationResponse = this.verification.enforce(event, url, clientIp, userAgent, tunnel?.validation, identity);
       if (verificationResponse) return verificationResponse;
 
       const requestObs = obs.startSpan("bt.web.request", {

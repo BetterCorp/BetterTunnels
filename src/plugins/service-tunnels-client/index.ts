@@ -204,7 +204,13 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         serverVersion: this.pluginPackageVersion,
         tenantId: auth.tenantId,
         bpUserSubject: auth.bpUserSubject,
-        tokenExpiresAt: auth.expiresAt.toISOString()
+        tokenExpiresAt: auth.expiresAt.toISOString(),
+        limits: {
+          tunnelTtlHours: 24,
+          requestTimeoutSeconds: 300,
+          idleTimeoutSeconds: 60,
+          customPrefixes: true
+        }
       });
     });
 
@@ -335,6 +341,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       clientVersion: url.searchParams.get("clientVersion") ?? undefined,
       authenticated: url.searchParams.get("authenticated") === "true",
       prefix: url.searchParams.get("prefix") ?? undefined,
+      validation: url.searchParams.get("validation") ?? undefined,
       token: url.searchParams.get("token") ?? undefined
     });
 
@@ -359,6 +366,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     }
 
     const authenticated = !!authContext;
+    const validation = authenticated && input.validation === "ip" ? "ip" : "cookie";
     let subdomain: string | undefined;
     if (!(authenticated && input.prefix)) {
       // Reuse the prior subdomain for this session so reconnects keep the same public URL.
@@ -410,6 +418,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         targetHost: input.targetHost,
         targetPort: input.targetPort,
         authenticated,
+        validation,
         accountId: authContext?.accountId,
         status: "active",
         expiresAt
@@ -420,6 +429,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         targetHost: input.targetHost,
         targetPort: input.targetPort,
         authenticated,
+        validation,
         accountId: authContext?.accountId,
         status: "active",
         expiresAt

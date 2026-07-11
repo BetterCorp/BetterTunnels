@@ -36,6 +36,7 @@ model Tunnel {
   targetHost    String
   targetPort    Int
   authenticated Boolean       @default(false)
+  validation    String        @default("cookie")
   status        TunnelStatus  @default(created)
   createdAt     DateTime      @default(now())
   expiresAt     DateTime

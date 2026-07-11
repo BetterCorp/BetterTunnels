@@ -8,6 +8,7 @@ export const TunnelCreateSchema = av.object({
   clientVersion: av.optional(av.string()),
   authenticated: av.bool().default(false),
   prefix: av.optional(av.string()),
+  validation: av.optional(av.string()),
   token: av.optional(av.string())
 }, { unknownKeys: "strip" });
 export type TunnelCreateInput = Infer<typeof TunnelCreateSchema>;
@@ -36,6 +37,7 @@ export const TunnelConfigSchema = av.object({
   host: av.string().minLength(1).default("127.0.0.1"),
   port: av.number(),
   prefix: av.optional(av.string()),
+  validation: av.optional(av.string()),
   host_header: av.optional(av.string())
 }, { unknownKeys: "strip" });
 export type TunnelConfig = Infer<typeof TunnelConfigSchema>;
@@ -44,6 +46,7 @@ export const TunnelEntrySchema = av.object({
   host: av.string().minLength(1).default("127.0.0.1"),
   port: av.optional(av.number()),
   prefix: av.optional(av.string()),
+  validation: av.optional(av.string()),
   host_header: av.optional(av.string()),
   name: av.optional(av.string()),
   run: av.optional(av.string()),

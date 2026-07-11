@@ -23,6 +23,8 @@ type VerificationConfig = {
   turnstileSecretKey?: string;
 };
 
+type IpValidationIdentity = { ipHash: string; userAgent: string };
+
 export class VerificationFlow {
   constructor(private readonly config: VerificationConfig) {}
 
@@ -51,7 +53,8 @@ export class VerificationFlow {
     return this.verificationPage(returnTo);
   }
 
-  enforce(event: H3Event, url: URL, clientIp: string, userAgent: string): Response | undefined {
+  enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", identity?: IpValidationIdentity): Response | undefined {
+    if (validation === "ip" && identity && hash(clientIp) === identity.ipHash && hash(userAgent) === hash(identity.userAgent)) return undefined;
     if (this.validHostCookie(event.req.headers, url.hostname, clientIp, userAgent)) return undefined;
 
     const challenge = url.searchParams.get(CHALLENGE_PARAM);
