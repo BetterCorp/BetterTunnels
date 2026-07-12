@@ -15,9 +15,9 @@ export const ResponseSchema = av.object({
   highlights: av.array(av.object({
     title: av.string(),
     body: av.string()
-  }, { unknownKeys: "strip" })),
+  })),
   limits: av.array(av.string())
-}, { unknownKeys: "strip" });
+});
 export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(

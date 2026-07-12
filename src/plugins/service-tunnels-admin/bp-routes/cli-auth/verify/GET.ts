@@ -7,12 +7,12 @@ import { prisma } from "../../../../../prisma.js";
 export const QuerySchema = av.object({
   session: av.optional(av.string().minLength(1)),
   key: av.optional(av.string().minLength(1))
-}, { unknownKeys: "strip" });
+});
 
 export const ResponseSchema = av.object({
   status: av.string(),
   message: av.string()
-}, { unknownKeys: "strip" });
+});
 export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(

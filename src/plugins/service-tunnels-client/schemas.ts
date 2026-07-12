@@ -10,7 +10,7 @@ export const TunnelCreateSchema = av.object({
   prefix: av.optional(av.string()),
   validation: av.optional(av.string()),
   token: av.optional(av.string())
-}, { unknownKeys: "strip" });
+});
 export type TunnelCreateInput = Infer<typeof TunnelCreateSchema>;
 
 export const ClientFrameSchema = av.object({
@@ -21,6 +21,7 @@ export const ClientFrameSchema = av.object({
   headers: av.optional(av.record(av.string())),
   body: av.optional(av.string()),
   message: av.optional(av.string()),
+  validation: av.optional(av.string()),
   publicServerId: av.optional(av.string()),
   publicSocketId: av.optional(av.string()),
   frameType: av.optional(av.string()),
@@ -31,7 +32,7 @@ export const ClientFrameSchema = av.object({
   originMs: av.optional(av.number()),
   totalMs: av.optional(av.number()),
   internalServerMs: av.optional(av.number())
-}, { unknownKeys: "strip" });
+});
 
 export const TunnelConfigSchema = av.object({
   host: av.string().minLength(1).default("127.0.0.1"),
@@ -39,7 +40,7 @@ export const TunnelConfigSchema = av.object({
   prefix: av.optional(av.string()),
   validation: av.optional(av.string()),
   host_header: av.optional(av.string())
-}, { unknownKeys: "strip" });
+});
 export type TunnelConfig = Infer<typeof TunnelConfigSchema>;
 
 export const TunnelEntrySchema = av.object({
@@ -54,18 +55,18 @@ export const TunnelEntrySchema = av.object({
   dir: av.optional(av.string()),
   health: av.optional(av.string()),
   ready_timeout: av.optional(av.number())
-}, { unknownKeys: "strip" });
+});
 export type TunnelEntry = Infer<typeof TunnelEntrySchema>;
 
 export const FileConfigSchema = av.object({
   tunnels: av.array(TunnelEntrySchema).default([])
-}, { unknownKeys: "strip" });
+});
 export type FileConfig = Infer<typeof FileConfigSchema>;
 
 export const AuthStartRequestSchema = av.object({
   deviceName: av.optional(av.string()),
   authAppBaseUrl: av.optional(av.string())
-}, { unknownKeys: "strip" });
+});
 export type AuthStartRequest = Infer<typeof AuthStartRequestSchema>;
 
 export const AuthStartResponseSchema = av.object({
@@ -73,7 +74,7 @@ export const AuthStartResponseSchema = av.object({
   pollSecret: av.string(),
   browserUrl: av.string(),
   expiresAt: av.string()
-}, { unknownKeys: "strip" });
+});
 
 export const AuthStatusResponseSchema = av.object({
   status: av.string(),
@@ -83,4 +84,4 @@ export const AuthStatusResponseSchema = av.object({
   bpUserSubject: av.optional(av.string()),
   bpUserEmail: av.optional(av.string()),
   message: av.optional(av.string())
-}, { unknownKeys: "strip" });
+});

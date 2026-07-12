@@ -1,6 +1,6 @@
 /** @jsxImportSource jsx-htmx */
 import type { HtmlRenderable } from "@betterportal/framework";
-import type { DashboardData, ResponseData } from "../GET.js";
+import type { DashboardData } from "../GET.js";
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -73,20 +73,14 @@ export function renderDashboard(data: DashboardData): HtmlRenderable {
   );
 }
 
-export function render(data: ResponseData): HtmlRenderable {
-  const dashboard = data.items[0] ?? {
-    activeTunnels: 0,
-    requests: 0,
-    bytesIn: 0,
-    bytesOut: 0,
-    tunnels: []
-  };
+export function render(data: DashboardData): HtmlRenderable {
   return (
     <div
+      hx-ext="sse"
       hx-swap="innerHTML"
-      {...{ "hx-sse:connect": "/dashboard/__sse?_theme=bootstrap1" }}
+      {...{ "hx-sse:connect": "/dashboard/__sse?_f=body.live" }}
     >
-      {renderDashboard(dashboard)}
+      {renderDashboard(data)}
     </div>
   );
 }

@@ -5,6 +5,9 @@ import { tunnelStatusAfterDisconnect } from "../src/plugins/service-tunnels-clie
 import { TunnelCreateSchema } from "../src/plugins/service-tunnels-client/schemas.js";
 import { tunnelUnavailable } from "../src/plugins/service-tunnels-proxy/http.js";
 import { normalizeIpRange } from "../src/auth.js";
+import { createVerificationFlow } from "../src/plugins/service-tunnels-proxy/verification.js";
+import { registry } from "../src/plugins/service-tunnels-admin/.bp-generated/registry.js";
+import { render as renderDashboard } from "../src/plugins/service-tunnels-admin/bp-routes/dashboard/_theme.bootstrap1/GET.js";
 
 test("normalizes tunnel hostnames", () => {
   assert.equal(normalizeHostPart("127.0.0.1"), "127-0-0-1");
@@ -59,4 +62,67 @@ test("negotiates unavailable tunnel responses", async () => {
   const text = tunnelUnavailable(new Headers({ accept: "text/plain" }));
   assert.equal(text.headers.get("content-type"), "text/plain; charset=utf-8");
   assert.match(await text.text(), /not available right now/);
+});
+
+test("gates Turnstile submission and accepts recorded IP validation", async () => {
+  const flow = createVerificationFlow({
+    domain: "tunnels.example.test",
+    verificationHost: "verify.tunnels.example.test",
+    cookieSecret: "test-secret",
+    turnstileSiteKey: "test-site-key"
+  });
+  const target = new URL("https://demo.tunnels.example.test/unavailable");
+  const verifyUrl = new URL("https://verify.tunnels.example.test/");
+  verifyUrl.searchParams.set("return", target.toString());
+  const page = await flow.handleVerificationHost(
+    { req: new Request(verifyUrl) } as never,
+    verifyUrl,
+    "203.0.113.42",
+    "Test Browser"
+  );
+  const html = await page.text();
+
+  assert.match(html, /id="continue" type="submit" disabled/);
+  assert.match(html, /data-callback="turnstileDone"/);
+  assert.match(html, /data-expired-callback="turnstileReset"/);
+
+  const event = { req: new Request(target) } as never;
+  assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", true), undefined);
+
+  const redirect = await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", false);
+  assert.equal(redirect?.status, 302);
+  assert.match(redirect?.headers.get("location") ?? "", /^https:\/\/verify\.tunnels\.example\.test\//);
+});
+
+test("registers the dashboard as a native SSE view", () => {
+  const route = registry.routes.find((candidate) => candidate.viewId === "better-tunnels.dashboard");
+  assert.ok(route?.sse);
+  assert.equal(typeof route.sse.handler, "function");
+
+  const fragment = route.themeRenderers.bootstrap1?.fragments.find(
+    (candidate) => candidate.rendererId === "body.live"
+  );
+  assert.equal(typeof fragment?.sseRender, "function");
+
+  const html = String(renderDashboard({
+    activeTunnels: 0,
+    requests: 0,
+    bytesIn: 0,
+    bytesOut: 0,
+    tunnels: []
+  }));
+  assert.match(html, /hx-ext="sse"/);
+  assert.match(html, /\/dashboard\/__sse\?_f=body\.live/);
+});
+
+test("uses unique descriptive view titles", () => {
+  const titles = registry.routes.map((route) => route.title);
+  assert.equal(new Set(titles).size, titles.length);
+  assert.deepEqual(Object.fromEntries(registry.routes.map((route) => [route.path, route.title])), {
+    "/cli-auth/verify": "CLI Authentication",
+    "/dashboard": "Tunnel Dashboard",
+    "/downloads": "CLI Downloads",
+    "/landing": "Development Tunnels",
+    "/tunnels": "Tunnel Sessions"
+  });
 });

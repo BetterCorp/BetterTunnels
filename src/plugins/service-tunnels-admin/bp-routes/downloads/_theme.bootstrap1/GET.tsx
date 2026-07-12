@@ -12,7 +12,7 @@ export function render(data: ResponseData): HtmlRenderable {
           class="img-fluid mb-3"
           style="max-width: 280px; height: auto;"
         />
-        <h1 class="h3 mb-1">BetterTunnels CLI</h1>
+        <h1 class="h3 mb-1">CLI Downloads</h1>
         <p class="text-body-secondary mb-0">Download the CLI and start a public development tunnel.</p>
       </div>
 

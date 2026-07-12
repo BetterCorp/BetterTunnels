@@ -7,14 +7,14 @@ const DownloadSchema = av.object({
   os: av.string(),
   arch: av.string(),
   artifact: av.string()
-}, { unknownKeys: "strip" });
+});
 
 export const ResponseSchema = av.object({
   latestTag: av.string(),
   logoUrl: av.string(),
   examples: av.array(av.string()),
   downloads: av.array(DownloadSchema)
-}, { unknownKeys: "strip" });
+});
 export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(

@@ -1,7 +1,6 @@
 import * as av from "anyvali";
 import type { Infer } from "anyvali";
-import { setTimeout as delay } from "node:timers/promises";
-import { createStreamHandler } from "../../.bp-generated/route-runtime.js";
+import { createHandler } from "../../.bp-generated/route-runtime.js";
 import { prisma } from "../../../../prisma.js";
 
 const TunnelSchema = av.object({
@@ -13,19 +12,20 @@ const TunnelSchema = av.object({
   requests: av.number(),
   bytesIn: av.number(),
   bytesOut: av.number()
-}, { unknownKeys: "strip" });
+});
 
-export const ItemSchema = av.object({
+export const DashboardSchema = av.object({
   activeTunnels: av.number(),
   requests: av.number(),
   bytesIn: av.number(),
   bytesOut: av.number(),
   tunnels: av.array(TunnelSchema)
-}, { unknownKeys: "strip" });
-export type DashboardData = Infer<typeof ItemSchema>;
-export type ResponseData = { items: DashboardData[] };
+});
+export type DashboardData = Infer<typeof DashboardSchema>;
+export const ResponseSchema = DashboardSchema;
+export type ResponseData = DashboardData;
 
-async function loadDashboard(): Promise<DashboardData> {
+export async function loadDashboard(): Promise<DashboardData> {
   const now = new Date();
   const [tunnels, usageRows] = await Promise.all([
     prisma.tunnel.findMany({
@@ -54,13 +54,4 @@ async function loadDashboard(): Promise<DashboardData> {
   };
 }
 
-export default createStreamHandler(
-  { item: ItemSchema },
-  async function* ({ headers }) {
-    const live = headers.accept?.includes("text/event-stream") ?? false;
-    do {
-      yield await loadDashboard();
-      if (live) await delay(5_000);
-    } while (live);
-  }
-);
+export default createHandler({ response: ResponseSchema }, loadDashboard);

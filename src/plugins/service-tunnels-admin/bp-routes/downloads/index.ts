@@ -4,7 +4,7 @@ import {
 } from "@betterportal/framework";
 
 export const viewId = "better-tunnels.downloads";
-export const title = "BetterTunnels CLI";
+export const title = "CLI Downloads";
 export const description = "CLI download and setup commands.";
 
 export const auth: ApiAuthRequirement = {

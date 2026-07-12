@@ -15,9 +15,9 @@ const PluginConfigSchema = av.object({
   port: av.int().min(1).default(8083),
   database: av.object({
     connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
-  }, { unknownKeys: "strip" }).describe("Database configuration"),
+  }).describe("Database configuration"),
   betterportal: BetterPortalConfigSchema
-}, { unknownKeys: "strip" });
+});
 
 const Config = createConfigSchema(
   {

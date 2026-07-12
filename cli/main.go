@@ -80,6 +80,7 @@ type frame struct {
 	ExpiresAt            string            `json:"expiresAt,omitempty"`
 	ServerVersion        string            `json:"serverVersion,omitempty"`
 	OriginMs             *float64          `json:"originMs,omitempty"`
+	Validation           string            `json:"validation,omitempty"`
 	CLIOverheadMs        *float64          `json:"cliOverheadMs,omitempty"`
 	TotalMs              *float64          `json:"totalMs,omitempty"`
 	ClientAPIRoundtripMs *float64          `json:"clientApiRoundtripMs,omitempty"`
@@ -454,6 +455,9 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			fmt.Printf("Local:  http://%s:%d\n", config.Host, config.Port)
 			fmt.Printf("Public: %s\n", f.PublicURL)
 			fmt.Printf("TTL:    %s\n", f.ExpiresAt)
+			if f.Validation != "" {
+				fmt.Printf("Visitor auth: %s\n", f.Validation)
+			}
 			if f.ServerVersion != "" {
 				fmt.Printf("Server: %s\n", versionLabel(f.ServerVersion))
 			}

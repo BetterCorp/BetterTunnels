@@ -15,7 +15,7 @@ import { H3, getRequestURL, toNodeHandler } from "h3";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js";
 import { buildProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
-import { createVerificationFlow, type VerificationFlow } from "./verification.js";
+import { createVerificationFlow, hash, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
 import { initializePrisma } from "../../prisma.js";
 
@@ -28,7 +28,7 @@ export const Config = createConfigSchema(
   av.object({
     database: av.object({
       connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
-    }, { unknownKeys: "strip" }).describe("Database configuration"),
+    }).describe("Database configuration"),
     port: av.number().default(8080).describe("Public web listener port"),
     domain: av.string().default("tunnels.betterportal.dev").describe("Tunnel root domain"),
     verificationHost: av.string().default("verify.tunnels.betterportal.dev").describe("Verification host"),
@@ -104,13 +104,15 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       headers: { "content-type": "text/plain; charset=utf-8" }
     }));
 
-    this.server.on("upgrade", (request, socket, head) => {
+    this.server.on("upgrade", async (request, socket, head) => {
       const host = request.headers.host ?? "";
       const url = new URL(request.url ?? "/", `https://${host}`);
       const headers = requestHeaders(request.headers);
       const clientIp = proxyClientIp(headers) ?? "unknown";
       const userAgent = request.headers["user-agent"] ?? "";
-      const verificationResponse = this.verification.enforce({ req: new Request(url, { headers }) } as never, url, clientIp, Array.isArray(userAgent) ? userAgent.join(" ") : userAgent);
+      const userAgentValue = Array.isArray(userAgent) ? userAgent.join(" ") : userAgent;
+      const validation = await visitorValidation(url.hostname, clientIp, userAgentValue);
+      const verificationResponse = await this.verification.enforce({ req: new Request(url, { headers }) } as never, url, clientIp, userAgentValue, validation.strategy, validation.ipValidated);
       if (this.verification.isVerificationHost(url.hostname) || verificationResponse) {
         socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
@@ -131,15 +133,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         return this.verification.handleVerificationHost(event, url, clientIp, userAgent);
       }
 
-      const subdomain = url.hostname.split(".")[0] ?? "";
-      const tunnel = await prisma.tunnel.findUnique({
-        where: { subdomain },
-        select: { validation: true, session: { select: { ipHash: true, userAgent: true } } }
-      });
-      const identity = tunnel?.session.ipHash && tunnel.session.userAgent
-        ? { ipHash: tunnel.session.ipHash, userAgent: tunnel.session.userAgent }
-        : undefined;
-      const verificationResponse = this.verification.enforce(event, url, clientIp, userAgent, tunnel?.validation, identity);
+      const validation = await visitorValidation(url.hostname, clientIp, userAgent);
+      const verificationResponse = await this.verification.enforce(event, url, clientIp, userAgent, validation.strategy, validation.ipValidated);
       if (verificationResponse) return verificationResponse;
 
       const requestObs = obs.startSpan("bt.web.request", {
@@ -300,6 +295,25 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       internalServerMs
     });
   }
+}
+
+async function visitorValidation(hostname: string, clientIp: string, userAgent: string): Promise<{ strategy?: string; ipValidated: boolean }> {
+  const tunnel = await prisma.tunnel.findUnique({
+    where: { subdomain: hostname.split(".")[0] ?? "" },
+    select: {
+      validation: true,
+      validations: {
+        where: {
+          visitorIpHash: hash(clientIp),
+          userAgentHash: hash(userAgent),
+          expiresAt: { gt: new Date() }
+        },
+        select: { id: true },
+        take: 1
+      }
+    }
+  });
+  return { strategy: tunnel?.validation, ipValidated: !!tunnel?.validations.length };
 }
 
 function roundMs(value: number): number {

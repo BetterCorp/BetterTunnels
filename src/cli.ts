@@ -139,11 +139,12 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
       }
 
       if (frame.type === "tunnel.ready") {
-        const ready = JSON.parse(raw.toString()) as { publicUrl: string; expiresAt: string };
+        const ready = JSON.parse(raw.toString()) as { publicUrl: string; expiresAt: string; validation?: string };
         console.log("Tunnel active");
         console.log(`Local:  http://${config.host}:${config.port}`);
         console.log(`Public: ${ready.publicUrl}`);
         console.log(`TTL:    ${ready.expiresAt}`);
+        if (ready.validation) console.log(`Visitor auth: ${ready.validation}`);
         return;
       }
 

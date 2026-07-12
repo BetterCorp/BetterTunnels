@@ -7,7 +7,7 @@ export function render(data: ResponseData): HtmlRenderable {
     <section class="container-fluid px-0">
       <div class="d-flex justify-content-between align-items-start mb-4">
         <div>
-          <h1 class="h3 mb-1">BetterTunnels</h1>
+          <h1 class="h3 mb-1">Tunnel Sessions</h1>
           <p class="text-body-secondary mb-0">Live tunnel sessions and recent usage.</p>
         </div>
         <div class="text-end">

@@ -1,5 +1,6 @@
 import { createHmac, createHash, timingSafeEqual } from "node:crypto";
 import type { H3Event } from "h3";
+import { prisma } from "../../prisma.js";
 
 const WIDE_COOKIE = "bt_verify";
 const HOST_COOKIE = "bt_tunnel";
@@ -23,7 +24,6 @@ type VerificationConfig = {
   turnstileSecretKey?: string;
 };
 
-type IpValidationIdentity = { ipHash: string; userAgent: string };
 
 export class VerificationFlow {
   constructor(private readonly config: VerificationConfig) {}
@@ -42,20 +42,24 @@ export class VerificationFlow {
         return this.verificationPage(returnTo, "Verification failed. Please try again.");
       }
 
+      await this.recordIpValidation(returnTo, clientIp, userAgent);
       return this.redirectWithWideCookie(returnTo, clientIp, userAgent);
     }
 
     const returnTo = url.searchParams.get("return") ?? "";
     if (!this.isAllowedReturn(returnTo)) return new Response("Invalid return URL.\n", { status: 400 });
     if (this.validWideCookie(event.req.headers, clientIp, userAgent)) {
+      await this.recordIpValidation(returnTo, clientIp, userAgent);
       return this.redirectWithChallenge(returnTo, clientIp, userAgent);
     }
     return this.verificationPage(returnTo);
   }
 
-  enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", identity?: IpValidationIdentity): Response | undefined {
-    if (validation === "ip" && identity && hash(clientIp) === identity.ipHash && hash(userAgent) === hash(identity.userAgent)) return undefined;
-    if (this.validHostCookie(event.req.headers, url.hostname, clientIp, userAgent)) return undefined;
+  async enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", ipValidated = false): Promise<Response | undefined> {
+    if (this.validHostCookie(event.req.headers, url.hostname, clientIp, userAgent)) {
+      if (validation === "ip" && !ipValidated) await this.recordIpValidation(url.toString(), clientIp, userAgent);
+      return undefined;
+    }
 
     const challenge = url.searchParams.get(CHALLENGE_PARAM);
     if (challenge && this.verifyToken(challenge, "challenge", clientIp, userAgent, url.hostname)) {
@@ -63,6 +67,7 @@ export class VerificationFlow {
       cleanUrl.searchParams.delete(CHALLENGE_PARAM);
       return redirect(cleanUrl.toString(), hostCookie(HOST_COOKIE, this.signToken("host", clientIp, userAgent, url.hostname)));
     }
+    if (validation === "ip" && ipValidated) return undefined;
 
     const verifyUrl = new URL(`https://${this.config.verificationHost}/`);
     verifyUrl.searchParams.set("return", url.toString());
@@ -149,10 +154,29 @@ export class VerificationFlow {
     return result.success === true;
   }
 
+  private async recordIpValidation(returnTo: string, clientIp: string, userAgent: string): Promise<void> {
+    const target = new URL(returnTo);
+    const tunnel = await prisma.tunnel.findUnique({
+      where: { subdomain: target.hostname.split(".")[0] ?? "" },
+      select: { id: true, validation: true }
+    });
+    if (tunnel?.validation !== "ip") return;
+
+    await prisma.visitorValidation.create({
+      data: {
+        tunnelId: tunnel.id,
+        visitorIpHash: hash(clientIp),
+        userAgentHash: hash(userAgent),
+        validationCookieHash: hash(this.signToken("host", clientIp, userAgent, target.hostname)),
+        expiresAt: new Date(Date.now() + COOKIE_TTL_SECONDS * 1000)
+      }
+    });
+  }
+
   private verificationPage(returnTo: string, error?: string): Response {
     const escapedReturn = escapeHtml(returnTo);
     const widget = this.config.turnstileSiteKey
-      ? `<div class="cf-turnstile" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}"></div><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
+      ? `<div class="cf-turnstile" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}" data-callback="turnstileDone" data-expired-callback="turnstileReset" data-error-callback="turnstileReset"></div><script>function turnstileDone(){document.getElementById("continue").disabled=false}function turnstileReset(){document.getElementById("continue").disabled=true}</script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
       : "";
     const errorHtml = error ? `<p class="error">${escapeHtml(error)}</p>` : "";
 
@@ -174,6 +198,7 @@ export class VerificationFlow {
     form { margin-top: 24px; display: grid; gap: 18px; }
     button { height: 50px; border: 0; border-radius: 8px; background: var(--danger); color: white; font-weight: 900; font-size: 15px; cursor: pointer; }
     button:hover { background: #e6273d; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
     .error { color: #ff9f9f; }
     small { display: block; margin-top: 18px; color: #d8969d; line-height: 1.45; }
   </style>
@@ -188,7 +213,7 @@ export class VerificationFlow {
     <form method="post">
       <input type="hidden" name="return" value="${escapedReturn}">
       ${widget}
-      <button type="submit">I expected this tunnel</button>
+      <button id="continue" type="submit"${this.config.turnstileSiteKey ? " disabled" : ""}>I expected this tunnel</button>
     </form>
     <small>Continuing verifies this browser and IP for a short time.</small>
   </main>
@@ -222,7 +247,7 @@ function hmac(value: string, secret: string): string {
   return createHmac("sha256", secret).update(value).digest("base64url");
 }
 
-function hash(value: string): string {
+export function hash(value: string): string {
   return createHash("sha256").update(value).digest("base64url");
 }
 

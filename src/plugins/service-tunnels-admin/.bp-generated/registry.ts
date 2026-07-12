@@ -4,8 +4,10 @@ import * as betterTunnelsCliAuthVerifyGETRoute from "../bp-routes/cli-auth/verif
 import * as betterTunnelsCliAuthVerifyBootstrap1PageGET from "../bp-routes/cli-auth/verify/_theme.bootstrap1/GET.js";
 import * as betterTunnelsDashboardRoute from "../bp-routes/dashboard/index.js";
 import * as betterTunnelsDashboardGETRoute from "../bp-routes/dashboard/GET.js";
+import * as betterTunnelsDashboardSse from "../bp-routes/dashboard/GET.sse.js";
 import * as betterTunnelsDashboardBootstrap1PageGET from "../bp-routes/dashboard/_theme.bootstrap1/GET.js";
-import * as betterTunnelsDashboardBootstrap1Stream from "../bp-routes/dashboard/_theme.bootstrap1/index.stream.js";
+import * as betterTunnelsDashboardBootstrap1BodyLiveGET from "../bp-routes/dashboard/_theme.bootstrap1/_body.live.GET.js";
+import * as betterTunnelsDashboardBootstrap1BodyLiveGETSse from "../bp-routes/dashboard/_theme.bootstrap1/_body.live.GET.sse.js";
 import * as betterTunnelsDownloadsRoute from "../bp-routes/downloads/index.js";
 import * as betterTunnelsDownloadsGETRoute from "../bp-routes/downloads/GET.js";
 import * as betterTunnelsDownloadsBootstrap1PageGET from "../bp-routes/downloads/_theme.bootstrap1/GET.js";
@@ -52,12 +54,10 @@ export const registry: BetterPortalRegistry = {
       methods: ["GET"],
       paramNames: [],
       schemas: {
-        response: betterTunnelsDashboardGETRoute.default.responseSchema,
-        item: betterTunnelsDashboardGETRoute.ItemSchema
+        response: betterTunnelsDashboardGETRoute.ResponseSchema
       },
       methodRoutes: { GET: { method: "GET", schemas: {
-        response: betterTunnelsDashboardGETRoute.default.responseSchema,
-        item: betterTunnelsDashboardGETRoute.ItemSchema
+        response: betterTunnelsDashboardGETRoute.ResponseSchema
       }, handler: betterTunnelsDashboardGETRoute.default } },
       handlers: { GET: betterTunnelsDashboardGETRoute.default },
       title: betterTunnelsDashboardRoute.title,
@@ -69,10 +69,10 @@ export const registry: BetterPortalRegistry = {
         "bootstrap1": {
           pages: [{ rendererId: "default", type: "page", method: "GET", render: betterTunnelsDashboardBootstrap1PageGET.render }],
           components: [],
-          fragments: [],
-          stream: { renderShell: betterTunnelsDashboardBootstrap1Stream.renderShell, renderItem: betterTunnelsDashboardBootstrap1Stream.renderItem }
+          fragments: [{ rendererId: "body.live", type: "fragment", method: "GET", fragmentLocation: "body", fragmentId: "live", render: betterTunnelsDashboardBootstrap1BodyLiveGET.render, sseRender: betterTunnelsDashboardBootstrap1BodyLiveGETSse.renderTick }]
         }
-      }
+      },
+      sse: { handler: betterTunnelsDashboardSse.handleSSE, tickSchema: betterTunnelsDashboardSse.tickSchema }
     },
     {
       viewId: "better-tunnels.downloads",

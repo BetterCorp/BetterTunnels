@@ -41,7 +41,7 @@ export const Config = createConfigSchema(
   av.object({
     database: av.object({
       connectionString: av.string().minLength(1).describe("PostgreSQL connection string")
-    }, { unknownKeys: "strip" }).describe("Database configuration"),
+    }).describe("Database configuration"),
     port: av.number().default(8081).describe("Client API listener port"),
     domain: av.string().default("tunnels.betterportal.dev").describe("Default public tunnel domain"),
     publicUrl: av.string().default("https://tunnels.betterportal.dev").describe("Public base URL"),
@@ -494,7 +494,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       publicUrl: publicUrl.replace(/\/$/, "").replace(`://${domain}`, `://${subdomain}.${domain}`),
       subdomain,
       expiresAt: expiresAt.toISOString(),
-      serverVersion: this.pluginPackageVersion
+      serverVersion: this.pluginPackageVersion,
+      validation
     }));
 
     ws.on("message", (raw) => this.handleClientFrame(tunnel, raw.toString()));

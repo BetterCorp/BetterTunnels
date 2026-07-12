@@ -4,7 +4,7 @@ import {
 } from "@betterportal/framework";
 
 export const viewId = "better-tunnels.cli-auth.verify";
-export const title = "BetterTunnels CLI Authentication";
+export const title = "CLI Authentication";
 export const description = "Approves a pending BetterTunnels CLI login session.";
 
 export const auth: ApiAuthRequirement = {

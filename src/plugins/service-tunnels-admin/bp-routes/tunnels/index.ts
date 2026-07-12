@@ -4,7 +4,7 @@ import {
 } from "@betterportal/framework";
 
 export const viewId = "better-tunnels.tunnels";
-export const title = "BetterTunnels";
+export const title = "Tunnel Sessions";
 export const description = "Tunnel sessions, status, and recent activity.";
 
 export const auth: ApiAuthRequirement = {

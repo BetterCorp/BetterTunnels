@@ -15,13 +15,13 @@ const TunnelRowSchema = av.object({
   requests: av.number(),
   bytesIn: av.number(),
   bytesOut: av.number()
-}, { unknownKeys: "strip" });
+});
 
 export const ResponseSchema = av.object({
   active: av.number(),
   total: av.number(),
   tunnels: av.array(TunnelRowSchema)
-}, { unknownKeys: "strip" });
+});
 export type ResponseData = Infer<typeof ResponseSchema>;
 
 export default createHandler(
