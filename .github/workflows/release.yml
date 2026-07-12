@@ -89,6 +89,7 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           npm version "${tag#v}" --no-git-tag-version --allow-same-version
       - run: npm ci
+      - run: npm run build
       - name: Publish BSB registry metadata
         env:
           BSB_REGISTRY_TOKEN: ${{ secrets.BSB_REGISTRY_TOKEN }}
@@ -103,6 +104,9 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: build
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/download-artifact@v4
         with:
           name: cli-release-assets
