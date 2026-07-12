@@ -387,7 +387,9 @@ func startTunnel(config tunnelConfig) error {
 }
 
 func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (code int, retry bool, ready bool) {
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"User-Agent": {clientUserAgent()}},
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Tunnel server unreachable for %s:%d (server-side issue, your local service is fine): %v\n", config.Host, config.Port, err)
 		return 0, true, false
@@ -1008,6 +1010,7 @@ func fetchServiceStatus(base, token string) (serviceStatusResponse, error) {
 		return serviceStatusResponse{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", clientUserAgent())
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return serviceStatusResponse{}, err
@@ -1054,7 +1057,13 @@ func logout() error {
 func login() error {
 	base := clientHTTPBase()
 	startURL := base + "/api/client/auth/start"
-	resp, err := http.Post(startURL, "application/json", strings.NewReader(`{}`))
+	req, err := http.NewRequest("POST", startURL, strings.NewReader(`{}`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", clientUserAgent())
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -1113,6 +1122,7 @@ func pollAuthStatus(base, sessionID, pollSecret string) (authStatusResponse, err
 		return authStatusResponse{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+pollSecret)
+	req.Header.Set("User-Agent", clientUserAgent())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return authStatusResponse{}, err
@@ -1331,7 +1341,7 @@ func latestGitHubVersion() (string, error) {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "BetterTunnels/"+versionLabel(version))
+	req.Header.Set("User-Agent", clientUserAgent())
 	client := http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1581,4 +1591,8 @@ func versionLabel(value string) string {
 		return value
 	}
 	return "v" + value
+}
+
+func clientUserAgent() string {
+	return "BetterTunnels/" + versionLabel(version)
 }
