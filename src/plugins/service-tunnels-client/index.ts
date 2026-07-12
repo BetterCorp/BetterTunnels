@@ -29,7 +29,7 @@ import {
   shortBrowserKey,
   verifySecret
 } from "../../auth.js";
-import { TunnelRegistry, type ActiveTunnel, type PendingRequest } from "./registry.js";
+import { TunnelRegistry, tunnelStatusAfterDisconnect, type ActiveTunnel, type PendingRequest } from "./registry.js";
 import TunnelWebClient from "../../.bsb/clients/service-tunnels-proxy.js";
 
 export const Config = createConfigSchema(
@@ -133,6 +133,22 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   async init(obs: Observable): Promise<void> {
     await initializePrisma(this.config.database.connectionString, obs);
     this.pluginPackageVersion = await loadPluginPackageVersion(this.packageCwd);
+    const now = new Date();
+    const [expired, disconnected] = await prisma.$transaction([
+      prisma.tunnel.updateMany({
+        where: { status: "active", expiresAt: { lte: now } },
+        data: { status: "expired" }
+      }),
+      // ponytail: single client-api replica; add owner heartbeats before horizontal scaling.
+      prisma.tunnel.updateMany({
+        where: { status: "active" },
+        data: { status: "disconnected" }
+      })
+    ]);
+    obs.log.info("CLIENT SESSION reconciled expired={expired} disconnected={disconnected}", {
+      expired: expired.count,
+      disconnected: disconnected.count
+    });
     obs.log.info("init {plugin}", { plugin: this.pluginName });
     await this.events.onReturnableEvent("proxy.request", obs, async (_handlerObs, input) => {
       _handlerObs.log.info("CLIENT API proxy.request {method} {hostname}{path}", {
@@ -330,6 +346,14 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 
   async dispose(): Promise<void> {
+    for (const tunnel of this.registry.values()) {
+      clearTimeout(tunnel.expiryTimer);
+      tunnel.ws.close(1001, "server shutting down");
+    }
+    await prisma.tunnel.updateMany({
+      where: { status: "active", ownerServerId: this.appId },
+      data: { status: "disconnected" }
+    });
     this.wss.close();
     await new Promise<void>((resolve, reject) => {
       this.server.close((error) => error ? reject(error) : resolve());
@@ -439,6 +463,13 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       }
     });
 
+    const expiryTimer = setTimeout(() => {
+      if (this.registry.get(subdomain)?.ws === ws) {
+        ws.close(1008, "tunnel expired");
+      }
+    }, Math.max(0, expiresAt.getTime() - Date.now()));
+    expiryTimer.unref();
+
     const tunnel: ActiveTunnel = {
       id: tunnelRow.id,
       subdomain,
@@ -447,6 +478,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       authenticated,
       expiresAt,
       ws,
+      expiryTimer,
       pending: new Map(),
       sessionObs
     };
@@ -467,6 +499,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
 
     ws.on("message", (raw) => this.handleClientFrame(tunnel, raw.toString()));
     ws.on("close", (code, reason) => {
+      clearTimeout(tunnel.expiryTimer);
       sessionObs.log.warn("CLIENT TUNNEL disconnected {subdomain}", { subdomain });
       for (const [requestId, pending] of tunnel.pending.entries()) {
         this.failPending(tunnel, requestId, pending, new Error("Tunnel client disconnected."));
@@ -474,7 +507,10 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       // A reconnect may already own this subdomain; only tear down if this socket is still the registered one.
       if (this.registry.get(subdomain)?.ws === ws) {
         this.registry.delete(subdomain);
-        void prisma.tunnel.update({ where: { id: tunnel.id }, data: { status: "disconnected" } }).catch(() => undefined);
+        void prisma.tunnel.update({
+          where: { id: tunnel.id },
+          data: { status: tunnelStatusAfterDisconnect(tunnel.expiresAt) }
+        }).catch(() => undefined);
       }
       sessionObs.end({ "bt.client.disconnect": true });
       sessionObs.log.warn("CLIENT TUNNEL socket closed {subdomain} code={code} reason={reason}", {

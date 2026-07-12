@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSubdomain, buildTunnelSubdomain, normalizeHostPart } from "../src/plugins/service-tunnels-client/ids.js";
+import { tunnelStatusAfterDisconnect } from "../src/plugins/service-tunnels-client/registry.js";
 import { TunnelCreateSchema } from "../src/plugins/service-tunnels-client/schemas.js";
 import { tunnelUnavailable } from "../src/plugins/service-tunnels-proxy/http.js";
 import { normalizeIpRange } from "../src/auth.js";
@@ -31,6 +32,12 @@ test("normalizes auth token IP ranges", () => {
     cidr: "2001:0db8:abcd:0012:0000:0000:0000:0000/64"
   });
   assert.equal(normalizeIpRange("unknown"), undefined);
+});
+
+test("classifies tunnel disconnects at expiry", () => {
+  const expiresAt = new Date("2026-07-12T12:00:00Z");
+  assert.equal(tunnelStatusAfterDisconnect(expiresAt, new Date("2026-07-12T11:59:59Z")), "disconnected");
+  assert.equal(tunnelStatusAfterDisconnect(expiresAt, expiresAt), "expired");
 });
 
 test("negotiates unavailable tunnel responses", async () => {

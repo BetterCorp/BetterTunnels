@@ -9,6 +9,7 @@ export interface ActiveTunnel {
   authenticated: boolean;
   expiresAt: Date;
   ws: WebSocket;
+  expiryTimer: NodeJS.Timeout;
   pending: Map<string, PendingRequest>;
   sessionObs: Observable;
 }
@@ -45,4 +46,12 @@ export class TunnelRegistry {
   delete(subdomain: string): void {
     this.tunnels.delete(subdomain);
   }
+
+  values(): IterableIterator<ActiveTunnel> {
+    return this.tunnels.values();
+  }
+}
+
+export function tunnelStatusAfterDisconnect(expiresAt: Date, now = new Date()): "expired" | "disconnected" {
+  return expiresAt <= now ? "expired" : "disconnected";
 }

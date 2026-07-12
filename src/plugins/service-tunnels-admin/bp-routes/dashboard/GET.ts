@@ -1,58 +1,66 @@
 import * as av from "anyvali";
 import type { Infer } from "anyvali";
-import { createHandler } from "@betterportal/framework";
+import { setTimeout as delay } from "node:timers/promises";
+import { createStreamHandler } from "../../.bp-generated/route-runtime.js";
 import { prisma } from "../../../../prisma.js";
 
-export const ResponseSchema = av.object({
+const TunnelSchema = av.object({
+  id: av.string(),
+  subdomain: av.string(),
+  target: av.string(),
+  authenticated: av.bool(),
+  expiresAt: av.string(),
+  requests: av.number(),
+  bytesIn: av.number(),
+  bytesOut: av.number()
+}, { unknownKeys: "strip" });
+
+export const ItemSchema = av.object({
   activeTunnels: av.number(),
-  totalTunnels: av.number(),
-  anonymousAccounts: av.number(),
-  registeredAccounts: av.number(),
   requests: av.number(),
   bytesIn: av.number(),
   bytesOut: av.number(),
-  recentAuditEvents: av.array(av.object({
-    id: av.string(),
-    event: av.string(),
-    subjectId: av.optional(av.string()),
-    createdAt: av.string()
-  }, { unknownKeys: "strip" }))
+  tunnels: av.array(TunnelSchema)
 }, { unknownKeys: "strip" });
-export type ResponseData = Infer<typeof ResponseSchema>;
+export type DashboardData = Infer<typeof ItemSchema>;
+export type ResponseData = { items: DashboardData[] };
 
-export default createHandler(
-  { response: ResponseSchema },
-  async () => {
-    const [
-      activeTunnels,
-      totalTunnels,
-      anonymousAccounts,
-      registeredAccounts,
-      usageRows,
-      recentAuditEvents
-    ] = await Promise.all([
-      prisma.tunnel.count({ where: { status: "active" } }),
-      prisma.tunnel.count(),
-      prisma.account.count({ where: { plan: "anonymous" } }),
-      prisma.account.count({ where: { NOT: { plan: "anonymous" } } }),
-      prisma.usageCounter.findMany(),
-      prisma.auditEvent.findMany({ orderBy: { createdAt: "desc" }, take: 10 })
-    ]);
+async function loadDashboard(): Promise<DashboardData> {
+  const now = new Date();
+  const [tunnels, usageRows] = await Promise.all([
+    prisma.tunnel.findMany({
+      where: { status: "active", expiresAt: { gt: now } },
+      orderBy: { createdAt: "desc" },
+      include: { usage: true }
+    }),
+    prisma.usageCounter.findMany()
+  ]);
 
-    return {
-      activeTunnels,
-      totalTunnels,
-      anonymousAccounts,
-      registeredAccounts,
-      requests: usageRows.reduce((sum, row) => sum + row.requests, 0),
-      bytesIn: usageRows.reduce((sum, row) => sum + Number(row.bytesIn), 0),
-      bytesOut: usageRows.reduce((sum, row) => sum + Number(row.bytesOut), 0),
-      recentAuditEvents: recentAuditEvents.map((event) => ({
-        id: event.id,
-        event: event.event,
-        subjectId: event.subjectId ?? undefined,
-        createdAt: event.createdAt.toISOString()
-      }))
-    };
+  return {
+    activeTunnels: tunnels.length,
+    requests: usageRows.reduce((sum, row) => sum + row.requests, 0),
+    bytesIn: usageRows.reduce((sum, row) => sum + Number(row.bytesIn), 0),
+    bytesOut: usageRows.reduce((sum, row) => sum + Number(row.bytesOut), 0),
+    tunnels: tunnels.map((tunnel) => ({
+      id: tunnel.id,
+      subdomain: tunnel.subdomain,
+      target: `${tunnel.targetHost}:${tunnel.targetPort}`,
+      authenticated: tunnel.authenticated,
+      expiresAt: tunnel.expiresAt.toISOString(),
+      requests: tunnel.usage?.requests ?? 0,
+      bytesIn: Number(tunnel.usage?.bytesIn ?? 0n),
+      bytesOut: Number(tunnel.usage?.bytesOut ?? 0n)
+    }))
+  };
+}
+
+export default createStreamHandler(
+  { item: ItemSchema },
+  async function* ({ headers }) {
+    const live = headers.accept?.includes("text/event-stream") ?? false;
+    do {
+      yield await loadDashboard();
+      if (live) await delay(5_000);
+    } while (live);
   }
 );
