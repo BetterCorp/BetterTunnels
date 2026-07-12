@@ -138,6 +138,8 @@ func run(args []string) error {
 		return nil
 	case "login":
 		return login()
+	case "logout":
+		return logout()
 	case "status":
 		return status()
 	case "version":
@@ -845,6 +847,7 @@ func closeReason(err error) string {
 
 func usage() {
 	fmt.Println("usage: btunnel login")
+	fmt.Println("usage: btunnel logout")
 	fmt.Println("usage: btunnel status")
 	fmt.Println("usage: btunnel version")
 	fmt.Println("usage: btunnel update [version]")
@@ -861,6 +864,7 @@ func help() {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  btunnel login                  Authenticate in your browser")
+	fmt.Println("  btunnel logout                 Clear the local auth token")
 	fmt.Println("  btunnel status                 Check CLI, server, auth, and limits")
 	fmt.Println("  btunnel http 3000              Expose localhost:3000")
 	fmt.Println("  btunnel http 127.0.0.1:8080    Expose a specific local target")
@@ -1033,6 +1037,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return "unknown"
+}
+
+func logout() error {
+	path, err := statePath()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	fmt.Println("BetterTunnels CLI logged out. Local auth token cleared.")
+	return nil
 }
 
 func login() error {
