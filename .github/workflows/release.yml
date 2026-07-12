@@ -90,6 +90,7 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           npm version "${tag#v}" --no-git-tag-version --allow-same-version
       - run: npm ci
+      - run: npm run build
       - name: Fail if npm version already exists
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
