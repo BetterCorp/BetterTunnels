@@ -84,6 +84,9 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
 
   assert.match(html, /id="continue" type="submit" disabled/);
   assert.match(html, /render=explicit/);
+  assert.match(html, /id="turnstile-widget"/);
+  assert.match(html, /window\.turnstile\.render/);
+  assert.doesNotMatch(html, /id="turnstile"/);
   assert.match(html, /window\.innerWidth<400\?"compact":"flexible"/);
   assert.match(html, /"expired-callback":turnstileReset/);
 

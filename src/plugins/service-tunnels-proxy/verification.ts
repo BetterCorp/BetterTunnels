@@ -176,13 +176,13 @@ export class VerificationFlow {
   private verificationPage(returnTo: string, error?: string): Response {
     const escapedReturn = escapeHtml(returnTo);
     const widget = this.config.turnstileSiteKey
-      ? `<div id="turnstile" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}"></div>
+      ? `<div id="turnstile-widget" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}"></div>
 <script>
 function turnstileDone(){document.getElementById("continue").disabled=false}
 function turnstileReset(){document.getElementById("continue").disabled=true}
 function turnstileReady(){
-  const widget=document.getElementById("turnstile");
-  turnstile.render(widget,{sitekey:widget.dataset.sitekey,size:window.innerWidth<400?"compact":"flexible",callback:turnstileDone,"expired-callback":turnstileReset,"error-callback":turnstileReset});
+  const widget=document.getElementById("turnstile-widget");
+  window.turnstile.render(widget,{sitekey:widget.dataset.sitekey,size:window.innerWidth<400?"compact":"flexible",callback:turnstileDone,"expired-callback":turnstileReset,"error-callback":turnstileReset});
 }
 </script>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=turnstileReady&render=explicit" async defer></script>`
@@ -205,7 +205,7 @@ function turnstileReady(){
     p { margin: 18px 0 0; color: var(--muted); font-size: 18px; line-height: 1.45; }
     .notice { border: 1px solid var(--danger); background: rgba(255,52,76,.12); padding: 16px; border-radius: 8px; margin-top: 22px; font-weight: 800; }
     form { margin-top: 24px; display: grid; gap: 18px; }
-    #turnstile { justify-self: center; max-width: 100%; }
+    #turnstile-widget { justify-self: center; max-width: 100%; }
     button { width: 100%; min-width: 0; height: 50px; border: 0; border-radius: 8px; background: var(--danger); color: white; font-weight: 900; font-size: 15px; cursor: pointer; }
     button:hover { background: #e6273d; }
     button:disabled { opacity: .5; cursor: not-allowed; }
