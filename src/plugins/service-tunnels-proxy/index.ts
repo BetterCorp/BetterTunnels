@@ -145,6 +145,8 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       });
       const startedAt = Date.now();
 
+      let bytesIn = 0;
+      let bytesOut = 0;
       try {
         requestObs.log.info("WEB REQUEST start {method} {host}{path} clientIp={clientIp}", {
           method: event.req.method,
@@ -153,6 +155,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
           clientIp
         });
         const headerBytes = approximateHeaderBytes(event.req.headers);
+        bytesIn = headerBytes;
         if (headerBytes > this.config.maxHeaderBytes) {
           requestObs.log.warn("WEB REQUEST rejected headers too large {headerBytes}", { headerBytes });
           requestObs.end({ "http.response.status_code": 431 });
@@ -167,6 +170,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         }
 
         const bodyBuffer = event.req.body ? Buffer.from(await event.req.arrayBuffer()) : undefined;
+        bytesIn += bodyBuffer?.byteLength ?? 0;
         if (bodyBuffer && bodyBuffer.byteLength > this.config.maxBodyBytes) {
           requestObs.log.warn("WEB REQUEST rejected buffered body too large {bodyBytes}", { bodyBytes: bodyBuffer.byteLength });
           requestObs.end({ "http.response.status_code": 413 });
@@ -183,6 +187,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         }, 60);
 
         const durationMs = Date.now() - startedAt;
+        bytesOut = approximateResponseBytes(response.headers, response.body);
         this.sendProxyMetrics(obs, url.hostname, response, durationMs);
         requestObs.log.info("WEB REQUEST complete {method} {host}{path} -> {status} in {durationMs}ms", {
           method: event.req.method,
@@ -214,6 +219,16 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         });
         requestObs.end({ "http.response.status_code": 503 });
         return tunnelUnavailable(event.req.headers);
+      } finally {
+        const tunnelId = validation.tunnelId;
+        if (tunnelId) {
+          void recordUsage(tunnelId, bytesIn, bytesOut).catch((error) => {
+            obs.log.warn("WEB REQUEST usage update failed tunnel={tunnelId}: {message}", {
+              tunnelId,
+              message: error instanceof Error ? error.message : String(error)
+            });
+          });
+        }
       }
     });
   }
@@ -297,11 +312,12 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 }
 
-async function visitorValidation(hostname: string, clientIp: string, userAgent: string): Promise<{ strategy?: string; ipValidated: boolean }> {
+async function visitorValidation(hostname: string, clientIp: string, userAgent: string): Promise<{ tunnelId?: string; strategy?: string; ipValidated: boolean }> {
   const tunnel = await prisma.tunnel.findUnique({
     where: { subdomain: hostname.split(".")[0] ?? "" },
     select: {
       validation: true,
+      id: true,
       validations: {
         where: {
           visitorIpHash: hash(clientIp),
@@ -313,7 +329,19 @@ async function visitorValidation(hostname: string, clientIp: string, userAgent: 
       }
     }
   });
-  return { strategy: tunnel?.validation, ipValidated: !!tunnel?.validations.length };
+  return { tunnelId: tunnel?.id, strategy: tunnel?.validation, ipValidated: !!tunnel?.validations.length };
+}
+
+async function recordUsage(tunnelId: string, bytesIn: number, bytesOut: number): Promise<void> {
+  await prisma.usageCounter.upsert({
+    where: { tunnelId },
+    create: { tunnelId, requests: 1, bytesIn: BigInt(bytesIn), bytesOut: BigInt(bytesOut) },
+    update: {
+      requests: { increment: 1 },
+      bytesIn: { increment: BigInt(bytesIn) },
+      bytesOut: { increment: BigInt(bytesOut) }
+    }
+  });
 }
 
 function roundMs(value: number): number {
@@ -326,6 +354,13 @@ function approximateHeaderBytes(headers: Headers): number {
     total += Buffer.byteLength(name) + Buffer.byteLength(value) + 4;
   });
   return total;
+}
+
+function approximateResponseBytes(headers: Record<string, string>, body: string): number {
+  return Object.entries(headers).reduce(
+    (total, [name, value]) => total + Buffer.byteLength(name) + Buffer.byteLength(value) + 4,
+    Buffer.from(body, "base64").byteLength
+  );
 }
 
 function requestHeaders(headers: import("node:http").IncomingHttpHeaders): Headers {

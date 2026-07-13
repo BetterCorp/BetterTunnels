@@ -412,6 +412,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       const prefix = authenticated && input.prefix ? input.prefix : randomPrefix();
       subdomain = buildTunnelSubdomain(prefix, input.targetPort, clientIp);
     }
+    const publicTunnelUrl = publicUrl.replace(/\/$/, "").replace(`://${domain}`, `://${subdomain}.${domain}`);
     const expiresAt = new Date(Date.now() + (authenticated ? 24 * 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
     const sessionObs = this.createTrace("bt.client.session", {
       "bt.client.session_id": input.sessionId,
@@ -448,6 +449,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         validation,
         accountId: authContext?.accountId,
         status: "active",
+        publicUrl: publicTunnelUrl,
         expiresAt
       },
       update: {
@@ -459,6 +461,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         validation,
         accountId: authContext?.accountId,
         status: "active",
+        publicUrl: publicTunnelUrl,
         expiresAt
       }
     });
@@ -491,7 +494,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     });
     ws.send(JSON.stringify({
       type: "tunnel.ready",
-      publicUrl: publicUrl.replace(/\/$/, "").replace(`://${domain}`, `://${subdomain}.${domain}`),
+      publicUrl: publicTunnelUrl,
       subdomain,
       expiresAt: expiresAt.toISOString(),
       serverVersion: this.pluginPackageVersion,

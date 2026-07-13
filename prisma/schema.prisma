@@ -30,6 +30,7 @@ model ClientSession {
 model Tunnel {
   id            String        @id @default(cuid())
   accountId     String?
+  publicUrl     String?
   sessionId     String
   subdomain     String        @unique
   ownerServerId String?

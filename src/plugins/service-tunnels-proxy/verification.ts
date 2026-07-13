@@ -176,7 +176,16 @@ export class VerificationFlow {
   private verificationPage(returnTo: string, error?: string): Response {
     const escapedReturn = escapeHtml(returnTo);
     const widget = this.config.turnstileSiteKey
-      ? `<div class="cf-turnstile" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}" data-callback="turnstileDone" data-expired-callback="turnstileReset" data-error-callback="turnstileReset"></div><script>function turnstileDone(){document.getElementById("continue").disabled=false}function turnstileReset(){document.getElementById("continue").disabled=true}</script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
+      ? `<div id="turnstile" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}"></div>
+<script>
+function turnstileDone(){document.getElementById("continue").disabled=false}
+function turnstileReset(){document.getElementById("continue").disabled=true}
+function turnstileReady(){
+  const widget=document.getElementById("turnstile");
+  turnstile.render(widget,{sitekey:widget.dataset.sitekey,size:window.innerWidth<400?"compact":"flexible",callback:turnstileDone,"expired-callback":turnstileReset,"error-callback":turnstileReset});
+}
+</script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=turnstileReady&render=explicit" async defer></script>`
       : "";
     const errorHtml = error ? `<p class="error">${escapeHtml(error)}</p>` : "";
 
@@ -189,14 +198,15 @@ export class VerificationFlow {
   <style>
     :root { color-scheme: dark; --bg: #120506; --panel: #1b0b0d; --line: #5b2027; --text: #fff6f6; --muted: #f0b8bd; --danger: #ff344c; --danger2: #ff6b7b; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top, #3b0c13 0, #120506 46%, #080203 100%); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: min(560px, 100%); border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,52,76,.14), rgba(255,255,255,.02)), var(--panel); border-radius: 12px; box-shadow: 0 28px 90px rgba(0,0,0,.5); padding: 30px; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: clamp(8px, 4vw, 24px); background: radial-gradient(circle at top, #3b0c13 0, #120506 46%, #080203 100%); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(560px, 100%); min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--line); background: linear-gradient(180deg, rgba(255,52,76,.14), rgba(255,255,255,.02)), var(--panel); border-radius: 12px; box-shadow: 0 28px 90px rgba(0,0,0,.5); padding: clamp(16px, 5vw, 30px); }
     .brand { color: var(--danger2); font-weight: 900; letter-spacing: .1em; text-transform: uppercase; font-size: 12px; }
     h1 { margin: 18px 0 0; font-size: clamp(34px, 7vw, 62px); line-height: .95; letter-spacing: 0; }
     p { margin: 18px 0 0; color: var(--muted); font-size: 18px; line-height: 1.45; }
     .notice { border: 1px solid var(--danger); background: rgba(255,52,76,.12); padding: 16px; border-radius: 8px; margin-top: 22px; font-weight: 800; }
     form { margin-top: 24px; display: grid; gap: 18px; }
-    button { height: 50px; border: 0; border-radius: 8px; background: var(--danger); color: white; font-weight: 900; font-size: 15px; cursor: pointer; }
+    #turnstile { justify-self: center; max-width: 100%; }
+    button { width: 100%; min-width: 0; height: 50px; border: 0; border-radius: 8px; background: var(--danger); color: white; font-weight: 900; font-size: 15px; cursor: pointer; }
     button:hover { background: #e6273d; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .error { color: #ff9f9f; }

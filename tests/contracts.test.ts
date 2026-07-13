@@ -83,8 +83,9 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   const html = await page.text();
 
   assert.match(html, /id="continue" type="submit" disabled/);
-  assert.match(html, /data-callback="turnstileDone"/);
-  assert.match(html, /data-expired-callback="turnstileReset"/);
+  assert.match(html, /render=explicit/);
+  assert.match(html, /window\.innerWidth<400\?"compact":"flexible"/);
+  assert.match(html, /"expired-callback":turnstileReset/);
 
   const event = { req: new Request(target) } as never;
   assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", true), undefined);
@@ -105,14 +106,29 @@ test("registers the dashboard as a native SSE view", () => {
   assert.equal(typeof fragment?.sseRender, "function");
 
   const html = String(renderDashboard({
-    activeTunnels: 0,
-    requests: 0,
-    bytesIn: 0,
-    bytesOut: 0,
-    tunnels: []
+    activeTunnels: 1,
+    requests: 2,
+    bytesIn: 3,
+    bytesOut: 4,
+    tunnels: [{
+      id: "t1",
+      subdomain: "demo",
+      publicUrl: "https://demo.tunnels.example.test",
+      target: "127.0.0.1:3000",
+      validation: "ip",
+      expiresAt: "2026-07-14T00:00:00.000Z",
+      requests: 2,
+      bytesIn: 3,
+      bytesOut: 4
+    }]
   }));
   assert.match(html, /hx-ext="sse"/);
   assert.match(html, /\/dashboard\/__sse\?_f=body\.live/);
+  assert.match(html, /href="https:\/\/demo\.tunnels\.example\.test"/);
+  assert.match(html, /IP validation/);
+  assert.match(html, /data-expires-at=/);
+  assert.match(html, /setInterval\(window\.updateTunnelCountdowns, 1000\)/);
+  assert.match(html, /Expires in/);
 });
 
 test("uses unique descriptive view titles", () => {

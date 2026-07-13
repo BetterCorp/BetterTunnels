@@ -1,5 +1,6 @@
 /** @jsxImportSource jsx-htmx */
 import type { HtmlRenderable } from "@betterportal/framework";
+import { js } from "jsx-htmx";
 import type { DashboardData } from "../GET.js";
 
 function formatBytes(value: number): string {
@@ -44,12 +45,12 @@ export function renderDashboard(data: DashboardData): HtmlRenderable {
           <table class="table table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
-                <th>Subdomain</th>
+                <th>Domain</th>
                 <th>Target</th>
-                <th>Mode</th>
+                <th>Visitor auth</th>
                 <th class="text-end">Requests</th>
                 <th>Transfer</th>
-                <th>Expires</th>
+                <th>Expires in</th>
               </tr>
             </thead>
             <tbody>
@@ -57,12 +58,21 @@ export function renderDashboard(data: DashboardData): HtmlRenderable {
                 <tr><td colspan="6" class="text-center text-body-secondary py-4">No active tunnels.</td></tr>
               ) : data.tunnels.map((tunnel) => (
                 <tr>
-                  <td><code>{tunnel.subdomain}</code></td>
+                  <td>
+                    {tunnel.publicUrl ? (
+                      <a href={tunnel.publicUrl} target="_blank" rel="noopener noreferrer">
+                        <code>{tunnel.publicUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}</code>
+                        <span class="small"> (open)</span>
+                      </a>
+                    ) : <code>{tunnel.subdomain}</code>}
+                  </td>
                   <td>{tunnel.target}</td>
-                  <td>{tunnel.authenticated ? "authenticated" : "anonymous"}</td>
+                  <td>{tunnel.validation === "ip" ? "IP validation" : "Cookie validation"}</td>
                   <td class="text-end">{String(tunnel.requests)}</td>
                   <td class="small text-body-secondary">{formatBytes(tunnel.bytesIn)} in / {formatBytes(tunnel.bytesOut)} out</td>
-                  <td class="small text-body-secondary">{new Date(tunnel.expiresAt).toLocaleString()}</td>
+                  <td class="small text-body-secondary">
+                    <time datetime={tunnel.expiresAt} {...{ "data-expires-at": tunnel.expiresAt }}>calculating...</time>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -81,6 +91,20 @@ export function render(data: DashboardData): HtmlRenderable {
       {...{ "hx-sse:connect": "/dashboard/__sse?_f=body.live" }}
     >
       {renderDashboard(data)}
+      <script>{js(`
+        window.updateTunnelCountdowns = function () {
+          document.querySelectorAll('[data-expires-at]').forEach(function (element) {
+            var seconds = Math.max(0, Math.ceil((Date.parse(element.dataset.expiresAt) - Date.now()) / 1000));
+            var days = Math.floor(seconds / 86400);
+            var hours = Math.floor(seconds % 86400 / 3600);
+            var minutes = Math.floor(seconds % 3600 / 60);
+            var remainder = seconds % 60;
+            element.textContent = (days ? days + 'd ' : '') + (days || hours ? hours + 'h ' : '') + minutes + 'm ' + remainder + 's';
+          });
+        };
+        window.updateTunnelCountdowns();
+        window.tunnelCountdownTimer ||= setInterval(window.updateTunnelCountdowns, 1000);
+      `)}</script>
     </div>
   );
 }
