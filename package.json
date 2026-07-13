@@ -37,8 +37,8 @@
     "check": "npm run build && npm test"
   },
   "dependencies": {
-    "@betterportal/framework": "^10.1.2",
-    "@betterportal/plugin-bsb": "^10.1.2",
+    "@betterportal/framework": "^10.1.23",
+    "@betterportal/plugin-bsb": "^10.1.23",
     "@bsb/base": "^9.6.53",
     "@bsb/config-vault": "^9.6.53",
     "@prisma/adapter-pg": "^7.8.0",
