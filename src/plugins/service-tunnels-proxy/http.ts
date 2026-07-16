@@ -59,16 +59,20 @@ export function buildProxyResponse(body: Buffer, status: number, headers: Header
 }
 
 export function verificationFailureResponse(method: string, response: Response): Response {
-  if (method !== "OPTIONS") return response;
+  const headers = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "*",
+    "access-control-allow-headers": "*",
+    "access-control-max-age": "0",
+    "cache-control": "no-store"
+  };
+  if (method !== "OPTIONS") {
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  }
   return new Response(null, {
     status: 204,
-    headers: {
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "*",
-      "access-control-allow-headers": "*",
-      "access-control-max-age": "0",
-      "cache-control": "no-store"
-    }
+    headers
   });
 }
 

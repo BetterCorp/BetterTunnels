@@ -166,7 +166,15 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   assert.equal(preflight.headers.get("access-control-max-age"), "0");
   assert.equal(preflight.headers.get("cache-control"), "no-store");
   assert.equal(preflight.headers.get("location"), null);
-  assert.equal(verificationFailureResponse("GET", embeddedRedirect!), embeddedRedirect);
+  const guardedRedirect = verificationFailureResponse("GET", embeddedRedirect!);
+  assert.equal(guardedRedirect, embeddedRedirect);
+  assert.equal(guardedRedirect.status, 302);
+  assert.equal(guardedRedirect.headers.get("access-control-allow-origin"), "*");
+  assert.equal(guardedRedirect.headers.get("access-control-allow-methods"), "*");
+  assert.equal(guardedRedirect.headers.get("access-control-allow-headers"), "*");
+  assert.equal(guardedRedirect.headers.get("access-control-max-age"), "0");
+  assert.equal(guardedRedirect.headers.get("cache-control"), "no-store");
+  assert.equal(guardedRedirect.headers.get("location"), embeddedUrl.toString());
 });
 
 test("registers the dashboard as a native SSE view", () => {
