@@ -9,11 +9,18 @@ const COOKIE_TTL_SECONDS = 60 * 60;
 const CHALLENGE_TTL_SECONDS = 2 * 60;
 
 type Token = {
-  kind: "wide" | "host" | "challenge";
+  kind: "wide" | "host" | "challenge" | "embed";
   ip: string;
   ua: string;
   exp: number;
   host?: string;
+  origin?: string;
+};
+
+type EmbeddedState = {
+  origin: string;
+  token: string;
+  browserReturn?: string;
 };
 
 type VerificationConfig = {
@@ -33,26 +40,30 @@ export class VerificationFlow {
   }
 
   async handleVerificationHost(event: H3Event, url: URL, clientIp: string, userAgent: string): Promise<Response> {
-    if (event.req.method === "POST") {
-      const form = await event.req.formData();
-      const returnTo = String(form.get("return") ?? "");
+    const form = event.req.method === "POST" ? await event.req.formData() : undefined;
+    const returnTo = form ? String(form.get("return") ?? "") : url.searchParams.get("return") ?? "";
+    if (!this.isAllowedReturn(returnTo)) return invalidResponse("Invalid return URL.\n");
+
+    const embedded = this.readEmbeddedState(url, returnTo, clientIp, userAgent);
+    if (embedded === null) return invalidResponse("Invalid embedded return URL.\n");
+
+    if (form) {
       const turnstileToken = String(form.get("cf-turnstile-response") ?? "");
-      if (!this.isAllowedReturn(returnTo)) return new Response("Invalid return URL.\n", { status: 400 });
       if (!await this.verifyTurnstile(turnstileToken, clientIp)) {
-        return this.verificationPage(returnTo, "Verification failed. Please try again.");
+        return this.verificationPage(returnTo, embedded, "Verification failed. Please try again.");
       }
 
-      await this.recordIpValidation(returnTo, clientIp, userAgent);
+      const ipValidated = await this.recordIpValidation(returnTo, clientIp, userAgent);
+      if (embedded?.browserReturn && ipValidated) return redirect(embedded.browserReturn);
       return this.redirectWithWideCookie(returnTo, clientIp, userAgent);
     }
 
-    const returnTo = url.searchParams.get("return") ?? "";
-    if (!this.isAllowedReturn(returnTo)) return new Response("Invalid return URL.\n", { status: 400 });
     if (this.validWideCookie(event.req.headers, clientIp, userAgent)) {
-      await this.recordIpValidation(returnTo, clientIp, userAgent);
+      const ipValidated = await this.recordIpValidation(returnTo, clientIp, userAgent);
+      if (embedded?.browserReturn && ipValidated) return redirect(embedded.browserReturn);
       return this.redirectWithChallenge(returnTo, clientIp, userAgent);
     }
-    return this.verificationPage(returnTo);
+    return this.verificationPage(returnTo, embedded);
   }
 
   async enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", ipValidated = false): Promise<Response | undefined> {
@@ -62,15 +73,24 @@ export class VerificationFlow {
     }
 
     const challenge = url.searchParams.get(CHALLENGE_PARAM);
-    if (challenge && this.verifyToken(challenge, "challenge", clientIp, userAgent, url.hostname)) {
+    if (challenge && this.verifyToken(challenge, "challenge", clientIp, userAgent, { host: url.hostname })) {
       const cleanUrl = new URL(url);
       cleanUrl.searchParams.delete(CHALLENGE_PARAM);
-      return redirect(cleanUrl.toString(), hostCookie(HOST_COOKIE, this.signToken("host", clientIp, userAgent, url.hostname)));
+      return redirect(cleanUrl.toString(), hostCookie(HOST_COOKIE, this.signToken("host", clientIp, userAgent, { host: url.hostname })));
     }
     if (validation === "ip" && ipValidated) return undefined;
 
-    const verifyUrl = new URL(`https://${this.config.verificationHost}/`);
-    verifyUrl.searchParams.set("return", url.toString());
+    const verifyUrl = this.verificationUrl(url.toString());
+    if (validation === "ip") {
+      const origin = embeddedOrigin(event.req.headers.get("origin"), this.config.verificationHost);
+      if (origin) {
+        verifyUrl.searchParams.set("embed_origin", origin);
+        verifyUrl.searchParams.set("embed_token", this.signToken("embed", clientIp, userAgent, {
+          host: url.hostname,
+          origin
+        }));
+      }
+    }
     return redirect(verifyUrl.toString());
   }
 
@@ -82,7 +102,10 @@ export class VerificationFlow {
 
   private redirectWithChallenge(returnTo: string, clientIp: string, userAgent: string): Response {
     const target = new URL(returnTo);
-    target.searchParams.set(CHALLENGE_PARAM, this.signToken("challenge", clientIp, userAgent, target.hostname, CHALLENGE_TTL_SECONDS));
+    target.searchParams.set(CHALLENGE_PARAM, this.signToken("challenge", clientIp, userAgent, {
+      host: target.hostname,
+      ttl: CHALLENGE_TTL_SECONDS
+    }));
     return redirect(target.toString());
   }
 
@@ -93,22 +116,23 @@ export class VerificationFlow {
 
   private validHostCookie(headers: Headers, host: string, clientIp: string, userAgent: string): boolean {
     const token = readCookie(headers, HOST_COOKIE);
-    return !!token && this.verifyToken(token, "host", clientIp, userAgent, host);
+    return !!token && this.verifyToken(token, "host", clientIp, userAgent, { host });
   }
 
-  private signToken(kind: Token["kind"], clientIp: string, userAgent: string, host?: string, ttl = COOKIE_TTL_SECONDS): string {
+  private signToken(kind: Token["kind"], clientIp: string, userAgent: string, options: { host?: string; origin?: string; ttl?: number } = {}): string {
     const payload: Token = {
       kind,
       ip: hash(clientIp),
       ua: hash(userAgent),
-      exp: Math.floor(Date.now() / 1000) + ttl,
-      ...(host ? { host } : {})
+      exp: Math.floor(Date.now() / 1000) + (options.ttl ?? COOKIE_TTL_SECONDS),
+      ...(options.host ? { host: options.host } : {}),
+      ...(options.origin ? { origin: options.origin } : {})
     };
     const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
     return `${body}.${hmac(body, this.config.cookieSecret)}`;
   }
 
-  private verifyToken(raw: string, kind: Token["kind"], clientIp: string, userAgent: string, host?: string): boolean {
+  private verifyToken(raw: string, kind: Token["kind"], clientIp: string, userAgent: string, options: { host?: string; origin?: string } = {}): boolean {
     const [body, sig] = raw.split(".");
     if (!body || !sig || !safeEqual(sig, hmac(body, this.config.cookieSecret))) return false;
 
@@ -123,7 +147,8 @@ export class VerificationFlow {
       && token.exp >= Math.floor(Date.now() / 1000)
       && token.ip === hash(clientIp)
       && token.ua === hash(userAgent)
-      && (!host || token.host === host);
+      && (!options.host || token.host === options.host)
+      && (!options.origin || token.origin === options.origin);
   }
 
   private isAllowedReturn(value: string): boolean {
@@ -154,27 +179,80 @@ export class VerificationFlow {
     return result.success === true;
   }
 
-  private async recordIpValidation(returnTo: string, clientIp: string, userAgent: string): Promise<void> {
+  private async recordIpValidation(returnTo: string, clientIp: string, userAgent: string): Promise<boolean> {
     const target = new URL(returnTo);
     const tunnel = await prisma.tunnel.findUnique({
       where: { subdomain: target.hostname.split(".")[0] ?? "" },
       select: { id: true, validation: true }
     });
-    if (tunnel?.validation !== "ip") return;
+    if (tunnel?.validation !== "ip") return false;
 
     await prisma.visitorValidation.create({
       data: {
         tunnelId: tunnel.id,
         visitorIpHash: hash(clientIp),
         userAgentHash: hash(userAgent),
-        validationCookieHash: hash(this.signToken("host", clientIp, userAgent, target.hostname)),
+        validationCookieHash: hash(this.signToken("host", clientIp, userAgent, { host: target.hostname })),
         expiresAt: new Date(Date.now() + COOKIE_TTL_SECONDS * 1000)
       }
     });
+    return true;
   }
 
-  private verificationPage(returnTo: string, error?: string): Response {
+  private verificationUrl(returnTo: string): URL {
+    const url = new URL(`https://${this.config.verificationHost}/`);
+    url.searchParams.set("return", returnTo);
+    return url;
+  }
+
+  private readEmbeddedState(url: URL, returnTo: string, clientIp: string, userAgent: string): EmbeddedState | null | undefined {
+    const rawOrigin = url.searchParams.get("embed_origin");
+    const token = url.searchParams.get("embed_token");
+    const rawBrowserReturn = url.searchParams.get("browser_return");
+    if (!rawOrigin && !token && !rawBrowserReturn) return undefined;
+    if (!rawOrigin || !token) return null;
+
+    let origin: string;
+    let browserReturn: URL | undefined;
+    try {
+      const parsedOrigin = new URL(rawOrigin);
+      if (parsedOrigin.protocol !== "https:" || parsedOrigin.origin !== rawOrigin) return null;
+      origin = parsedOrigin.origin;
+      if (rawBrowserReturn) {
+        browserReturn = new URL(rawBrowserReturn);
+        if (browserReturn.protocol !== "https:" || browserReturn.origin !== origin) return null;
+      }
+    } catch {
+      return null;
+    }
+
+    const target = new URL(returnTo);
+    if (!this.verifyToken(token, "embed", clientIp, userAgent, { host: target.hostname, origin })) return null;
+    return { origin, token, ...(browserReturn ? { browserReturn: browserReturn.toString() } : {}) };
+  }
+
+  private verificationPage(returnTo: string, embedded?: EmbeddedState, error?: string): Response {
     const escapedReturn = escapeHtml(returnTo);
+    const pageUrl = this.verificationUrl(returnTo);
+    if (embedded) {
+      pageUrl.searchParams.set("embed_origin", embedded.origin);
+      pageUrl.searchParams.set("embed_token", embedded.token);
+      if (embedded.browserReturn) pageUrl.searchParams.set("browser_return", embedded.browserReturn);
+    }
+    const escapedPageUrl = escapeHtml(pageUrl.toString());
+    const takeover = embedded && !embedded.browserReturn
+      ? `<script>
+{
+  const form=document.getElementById("verification-form");
+  const currentUrl=new URL(window.location.href);
+  const verificationUrl=new URL(form.action);
+  if(currentUrl.origin===form.dataset.embeddedOrigin&&currentUrl.origin!==verificationUrl.origin){
+    verificationUrl.searchParams.set("browser_return",currentUrl.href);
+    window.top.location.href=verificationUrl.href;
+  }
+}
+</script>`
+      : "";
     const widget = this.config.turnstileSiteKey
       ? `<div id="turnstile-widget" data-sitekey="${escapeHtml(this.config.turnstileSiteKey)}"></div>
 <script>
@@ -220,7 +298,8 @@ function turnstileReady(){
     <p>This is a temporary developer tunnel. It is not a real login, bank, Microsoft, or production service.</p>
     <div class="notice">If you did not expect this exact developer tunnel, close this tab.</div>
     ${errorHtml}
-    <form method="post">
+    <form id="verification-form" method="post" action="${escapedPageUrl}"${embedded ? ` data-embedded-origin="${escapeHtml(embedded.origin)}"` : ""}>
+      ${takeover}
       <input type="hidden" name="return" value="${escapedReturn}">
       ${widget}
       <button id="continue" type="submit"${this.config.turnstileSiteKey ? " disabled" : ""}>I expected this tunnel</button>
@@ -229,15 +308,29 @@ function turnstileReady(){
   </main>
 </body>
 </html>`, {
-      headers: { "content-type": "text/html; charset=utf-8" }
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }
     });
   }
 }
 
 function redirect(location: string, cookie?: string): Response {
-  const headers = new Headers({ location });
+  const headers = new Headers({ location, "cache-control": "no-store" });
   if (cookie) headers.append("set-cookie", cookie);
   return new Response(null, { status: 302, headers });
+}
+
+function invalidResponse(message: string): Response {
+  return new Response(message, { status: 400, headers: { "cache-control": "no-store" } });
+}
+
+function embeddedOrigin(raw: string | null, verificationHost: string): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && url.hostname !== verificationHost ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readCookie(headers: Headers, name: string): string | undefined {

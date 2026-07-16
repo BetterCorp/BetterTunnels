@@ -58,6 +58,20 @@ export function buildProxyResponse(body: Buffer, status: number, headers: Header
   return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : new Uint8Array(body), { status: safeStatus, headers });
 }
 
+export function verificationFailureResponse(method: string, response: Response): Response {
+  if (method !== "OPTIONS") return response;
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "*",
+      "access-control-allow-headers": "*",
+      "access-control-max-age": "0",
+      "cache-control": "no-store"
+    }
+  });
+}
+
 export function tunnelUnavailable(headers: Headers, status = 503): Response {
   const accept = headers.get("accept")?.toLowerCase() ?? "";
   const payload = {

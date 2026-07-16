@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildSubdomain, buildTunnelSubdomain, normalizeHostPart } from "../src/plugins/service-tunnels-client/ids.js";
 import { tunnelStatusAfterDisconnect } from "../src/plugins/service-tunnels-client/registry.js";
 import { TunnelCreateSchema } from "../src/plugins/service-tunnels-client/schemas.js";
-import { tunnelUnavailable } from "../src/plugins/service-tunnels-proxy/http.js";
+import { tunnelUnavailable, verificationFailureResponse } from "../src/plugins/service-tunnels-proxy/http.js";
 import { normalizeIpRange } from "../src/auth.js";
 import { createVerificationFlow } from "../src/plugins/service-tunnels-proxy/verification.js";
 import { registry } from "../src/plugins/service-tunnels-admin/.bp-generated/registry.js";
@@ -89,6 +89,9 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   assert.doesNotMatch(html, /id="turnstile"/);
   assert.match(html, /window\.innerWidth<400\?"compact":"flexible"/);
   assert.match(html, /"expired-callback":turnstileReset/);
+  assert.match(html, /action="https:\/\/verify\.tunnels\.example\.test\/\?return=/);
+  assert.doesNotMatch(html, /window\.top\.location\.href/);
+  assert.equal(page.headers.get("cache-control"), "no-store");
 
   const event = { req: new Request(target) } as never;
   assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", true), undefined);
@@ -96,6 +99,74 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   const redirect = await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", false);
   assert.equal(redirect?.status, 302);
   assert.match(redirect?.headers.get("location") ?? "", /^https:\/\/verify\.tunnels\.example\.test\//);
+
+  assert.equal(redirect?.headers.get("cache-control"), "no-store");
+
+  const embeddedRequest = new Request(target, {
+    headers: { origin: "https://app.example.test" }
+  });
+  const embeddedRedirect = await flow.enforce(
+    { req: embeddedRequest } as never,
+    target,
+    "203.0.113.42",
+    "Test Browser",
+    "ip",
+    false
+  );
+  const embeddedUrl = new URL(embeddedRedirect?.headers.get("location") ?? "");
+  assert.equal(embeddedUrl.searchParams.get("embed_origin"), "https://app.example.test");
+
+  const embeddedPage = await flow.handleVerificationHost(
+    { req: new Request(embeddedUrl) } as never,
+    embeddedUrl,
+    "203.0.113.42",
+    "Test Browser"
+  );
+  const embeddedHtml = await embeddedPage.text();
+  assert.match(embeddedHtml, /window\.top\.location\.href=verificationUrl\.href/);
+  assert.match(embeddedHtml, /verificationUrl\.searchParams\.set\("browser_return",currentUrl\.href\)/);
+
+  const browserReturnUrl = new URL(embeddedUrl);
+  browserReturnUrl.searchParams.set("browser_return", "https://app.example.test/dashboard");
+  const browserReturnPage = await flow.handleVerificationHost(
+    { req: new Request(browserReturnUrl) } as never,
+    browserReturnUrl,
+    "203.0.113.42",
+    "Test Browser"
+  );
+  assert.equal(browserReturnPage.status, 200);
+  assert.doesNotMatch(await browserReturnPage.text(), /window\.top\.location\.href/);
+
+  const invalidBrowserReturnUrl = new URL(embeddedUrl);
+  invalidBrowserReturnUrl.searchParams.set("browser_return", "https://evil.example.test/");
+  const invalidBrowserReturn = await flow.handleVerificationHost(
+    { req: new Request(invalidBrowserReturnUrl) } as never,
+    invalidBrowserReturnUrl,
+    "203.0.113.42",
+    "Test Browser"
+  );
+  assert.equal(invalidBrowserReturn.status, 400);
+  assert.equal(invalidBrowserReturn.headers.get("cache-control"), "no-store");
+
+  const cookieRedirect = await flow.enforce(
+    { req: embeddedRequest } as never,
+    target,
+    "203.0.113.42",
+    "Test Browser",
+    "cookie",
+    false
+  );
+  assert.doesNotMatch(cookieRedirect?.headers.get("location") ?? "", /embed_origin/);
+
+  const preflight = verificationFailureResponse("OPTIONS", embeddedRedirect!);
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "*");
+  assert.equal(preflight.headers.get("access-control-allow-methods"), "*");
+  assert.equal(preflight.headers.get("access-control-allow-headers"), "*");
+  assert.equal(preflight.headers.get("access-control-max-age"), "0");
+  assert.equal(preflight.headers.get("cache-control"), "no-store");
+  assert.equal(preflight.headers.get("location"), null);
+  assert.equal(verificationFailureResponse("GET", embeddedRedirect!), embeddedRedirect);
 });
 
 test("registers the dashboard as a native SSE view", () => {

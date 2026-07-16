@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { H3, getRequestURL, toNodeHandler } from "h3";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js";
-import { buildProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable } from "./http.js";
+import { buildProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable, verificationFailureResponse } from "./http.js";
 import { createVerificationFlow, hash, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
 import { initializePrisma } from "../../prisma.js";
@@ -135,7 +135,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
 
       const validation = await visitorValidation(url.hostname, clientIp, userAgent);
       const verificationResponse = await this.verification.enforce(event, url, clientIp, userAgent, validation.strategy, validation.ipValidated);
-      if (verificationResponse) return verificationResponse;
+      if (verificationResponse) return verificationFailureResponse(event.req.method, verificationResponse);
 
       const requestObs = obs.startSpan("bt.web.request", {
         "http.request.method": event.req.method,
