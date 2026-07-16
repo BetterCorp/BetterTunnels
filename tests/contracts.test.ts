@@ -92,6 +92,9 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   assert.match(html, /action="https:\/\/verify\.tunnels\.example\.test\/\?return=/);
   assert.doesNotMatch(html, /window\.top\.location\.href/);
   assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("access-control-allow-origin"), "*");
+  assert.equal(page.headers.get("content-security-policy"), "frame-ancestors 'none'");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
 
   const event = { req: new Request(target) } as never;
   assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", true), undefined);
