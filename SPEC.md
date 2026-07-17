@@ -509,6 +509,8 @@ CLI self-hosting behavior:
 - `btunnel host .` can serve a static directory and expose it publicly without a separate local server. It picks a free local port automatically; `--port <port>` overrides, and startup fails fast if that port is unavailable (no tunnel is started).
 - `btunnel host --dev --port <port> <command...>` can run a local dev server and expose its selected port. `--port` is required because the dev command, not the CLI, owns the listener.
 - `btunnel up` reads `.bettertunnel.json`; each tunnel entry can optionally orchestrate its own service:
+  - `btunnel up <prefix>` starts only the single entry whose configured `prefix` matches.
+  - `btunnel up --proc` opens each entry in its own terminal window and requires at least two entries.
   - `name`: label used for log prefixes and errors.
   - `run`: shell command the CLI starts and owns (`port` required; killed as a tree on exit/ctrl-c; if it exits, all services stop and `up` exits non-zero).
   - `cwd`: working directory for `run` (only valid with `run`).

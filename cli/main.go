@@ -63,6 +63,12 @@ type fileConfig struct {
 	Tunnels []tunnelConfig `json:"tunnels"`
 }
 
+type upOptions struct {
+	prefix string
+	proc   bool
+	entry  int
+}
+
 type frame struct {
 	Type                 string            `json:"type"`
 	Code                 int               `json:"code,omitempty"`
@@ -182,6 +188,10 @@ func run(args []string) error {
 		}
 		return startTunnel(cfg)
 	case "up":
+		opts, err := parseUpOptions(args[1:])
+		if err != nil {
+			return err
+		}
 		raw, err := os.ReadFile(".bettertunnel.json")
 		if err != nil {
 			return err
@@ -194,7 +204,12 @@ func run(args []string) error {
 		if len(cfg.Tunnels) == 0 {
 			return errors.New("no tunnels defined in .bettertunnel.json")
 		}
-		for i, t := range cfg.Tunnels {
+		selected, err := selectUpEntries(cfg.Tunnels, opts)
+		if err != nil {
+			return err
+		}
+		for _, i := range selected {
+			t := cfg.Tunnels[i]
 			label := entryLabel(t, i)
 			if t.Validation != "" && t.Validation != "cookie" && t.Validation != "ip" {
 				return fmt.Errorf("tunnel %s: validation must be cookie or ip", label)
@@ -208,6 +223,16 @@ func run(args []string) error {
 			if t.Cwd != "" && t.Run == "" {
 				return fmt.Errorf("tunnel %s: cwd requires run", label)
 			}
+		}
+		if opts.proc {
+			for _, i := range selected {
+				label := entryLabel(cfg.Tunnels[i], i)
+				fmt.Printf("[%s] opening in a new window\n", label)
+				if err := launchUpWindow(i); err != nil {
+					return fmt.Errorf("tunnel %s: %w", label, err)
+				}
+			}
+			return nil
 		}
 		var childMu sync.Mutex
 		var children []*exec.Cmd
@@ -228,7 +253,7 @@ func run(args []string) error {
 			killChildren()
 			os.Exit(0)
 		}()
-		for i := range cfg.Tunnels {
+		for _, i := range selected {
 			t := withDefaults(cfg.Tunnels[i])
 			label := entryLabel(t, i)
 			if t.Dir != "" {
@@ -745,6 +770,92 @@ func parseTarget(target string) (tunnelConfig, error) {
 	return tunnelConfig{Host: host, Port: port}, nil
 }
 
+func parseUpOptions(args []string) (upOptions, error) {
+	opts := upOptions{entry: -1}
+	for _, arg := range args {
+		switch {
+		case arg == "--proc":
+			opts.proc = true
+		case strings.HasPrefix(arg, "--entry="):
+			entry, err := strconv.Atoi(strings.TrimPrefix(arg, "--entry="))
+			if err != nil || entry < 0 {
+				return opts, fmt.Errorf("invalid --entry value %q", strings.TrimPrefix(arg, "--entry="))
+			}
+			opts.entry = entry
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unknown up flag %s", arg)
+		case opts.prefix != "":
+			return opts, errors.New("usage: btunnel up [prefix] [--proc]")
+		default:
+			opts.prefix = arg
+		}
+	}
+	if opts.entry >= 0 && (opts.prefix != "" || opts.proc) {
+		return opts, errors.New("--entry cannot be combined with a prefix or --proc")
+	}
+	return opts, nil
+}
+
+func selectUpEntries(tunnels []tunnelConfig, opts upOptions) ([]int, error) {
+	if opts.entry >= len(tunnels) {
+		return nil, fmt.Errorf("tunnel entry %d does not exist", opts.entry)
+	}
+	if opts.entry >= 0 {
+		return []int{opts.entry}, nil
+	}
+	selected := make([]int, 0, len(tunnels))
+	for i, tunnel := range tunnels {
+		if opts.prefix == "" || tunnel.Prefix == opts.prefix {
+			selected = append(selected, i)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("no tunnel uses prefix %q", opts.prefix)
+	}
+	if opts.prefix != "" && len(selected) > 1 {
+		return nil, fmt.Errorf("prefix %q matches more than one tunnel", opts.prefix)
+	}
+	if opts.proc && len(selected) < 2 {
+		return nil, errors.New("--proc requires at least two tunnels")
+	}
+	return selected, nil
+}
+
+func launchUpWindow(index int) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	entryArg := fmt.Sprintf("--entry=%d", index)
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("cmd", "/C", "start", "", executable, "up", entryArg).Run()
+	case "darwin":
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		script := `on run argv
+set command to "cd " & quoted form of item 1 of argv & " && " & quoted form of item 2 of argv & " up " & item 3 of argv
+tell application "Terminal" to do script command
+end run`
+		return exec.Command("osascript", "-e", script, cwd, executable, entryArg).Run()
+	default:
+		terminal := os.Getenv("TERMINAL")
+		if terminal == "" {
+			terminal = "x-terminal-emulator"
+		}
+		path, err := exec.LookPath(terminal)
+		if err != nil {
+			return fmt.Errorf("--proc requires a terminal emulator: %w", err)
+		}
+		cmd := exec.Command(path, "-e", executable, "up", entryArg)
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		return cmd.Process.Release()
+	}
+}
 func withDefaults(c tunnelConfig) tunnelConfig {
 	if c.Host == "" {
 		c.Host = "127.0.0.1"
@@ -893,7 +1004,7 @@ func usage() {
 	fmt.Println("       btunnel http <port|host:port> [--validation cookie|ip]")
 	fmt.Println("       btunnel host <dir> [--port <port>]")
 	fmt.Println("       btunnel host --dev --port <port> <command...>")
-	fmt.Println("       btunnel up")
+	fmt.Println("       btunnel up [prefix] [--proc]")
 	fmt.Println("       btunnel help")
 }
 
@@ -907,7 +1018,9 @@ func help() {
 	fmt.Println("  btunnel http 3000              Expose localhost:3000")
 	fmt.Println("  btunnel http 127.0.0.1:8080    Expose a specific local target")
 	fmt.Println("  btunnel http 3000 --validation ip  Use IP + user-agent validation (authenticated only)")
-	fmt.Println("  btunnel up                     Start tunnels from .bettertunnel.json")
+	fmt.Println("  btunnel up                     Start all tunnels from .bettertunnel.json")
+	fmt.Println("  btunnel up web                 Start only the tunnel whose prefix is web")
+	fmt.Println("  btunnel up --proc              Start each tunnel in its own terminal window (2+ tunnels)")
 	fmt.Println()
 	fmt.Println("Authentication:")
 	fmt.Println("  `login` stores a device token in the OS BetterTunnels config directory.")
@@ -922,6 +1035,9 @@ func help() {
 	fmt.Println("  `validation` accepts `cookie` (default) or `ip` (authenticated only).")
 	fmt.Println("  `host_header` overrides the Host header sent to the local service.")
 	fmt.Println("  `run`, `cwd`, `dir`, `health`, and `ready_timeout` configure `btunnel up` services.")
+	fmt.Println("  Readiness waits for `health` to return < 400, or for the configured TCP port to accept connections.")
+	fmt.Println("  `ready_timeout` is seconds per service (default 30); timeout stops all services and exits non-zero.")
+	fmt.Println("  `--proc` opens one terminal window per service and requires at least two selected tunnels.")
 	fmt.Println()
 	fmt.Println("Validation and URLs:")
 	fmt.Println("  Public URLs use the server's configured tunnel domain and generated prefix.")

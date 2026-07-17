@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -71,5 +72,48 @@ func TestLocalRequestStreamsBeforeOriginCompletes(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUpOptionsSelectPrefixAndProcesses(t *testing.T) {
+	tunnels := []tunnelConfig{{Prefix: "api"}, {Prefix: "web"}}
+
+	opts, err := parseUpOptions([]string{"web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := selectUpEntries(tunnels, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(selected, []int{1}) {
+		t.Fatalf("selected %v, want [1]", selected)
+	}
+
+	opts, err = parseUpOptions([]string{"--proc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err = selectUpEntries(tunnels, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(selected, []int{0, 1}) {
+		t.Fatalf("selected %v, want [0 1]", selected)
+	}
+	if _, err := selectUpEntries(tunnels[:1], opts); err == nil {
+		t.Fatal("--proc accepted fewer than two tunnels")
+	}
+
+	opts, err = parseUpOptions([]string{"--entry=1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err = selectUpEntries(tunnels, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(selected, []int{1}) {
+		t.Fatalf("selected %v, want [1]", selected)
 	}
 }
