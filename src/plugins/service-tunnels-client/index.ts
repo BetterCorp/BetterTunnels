@@ -76,12 +76,21 @@ export const EventSchemas = createEventSchemas({
         internalServerMs: optional(bsb.number({ description: "Remaining server-side duration" }))
       }, "Proxy request metrics"),
       "Send final proxy request timings to the connected tunnel client"
+    ),
+    "proxy.cancel": createFireAndForgetEvent(
+      bsb.object({
+        hostname: bsb.string({ description: "Public tunnel hostname" }),
+        requestId: bsb.string({ description: "Request id" })
+      }, "Proxy request cancellation"),
+      "Cancel an active HTTP request"
     )
   },
   emitReturnableEvents: {},
   onReturnableEvents: {
     "proxy.request": createReturnableEvent(
       bsb.object({
+        publicServerId: bsb.string({ description: "Web service instance that owns the public response" }),
+        publicRequestId: bsb.string({ description: "Web service local request id" }),
         hostname: bsb.string({ description: "Public request hostname" }),
         method: bsb.string({ description: "HTTP method" }),
         path: bsb.string({ description: "Path and query" }),
@@ -94,14 +103,12 @@ export const EventSchemas = createEventSchemas({
         ownerServerId: bsb.string({ description: "Client API server id" }),
         status: bsb.number({ description: "HTTP status" }),
         headers: bsb.record(bsb.string({ description: "Header name" }), bsb.string({ description: "Header value" }), "Headers"),
-        body: bsb.string({ description: "Base64 encoded response body" }),
+        body: optional(bsb.string({ description: "Base64 encoded immediate response body" })),
         webStartedAt: bsb.number({ description: "Web service request start timestamp" }),
-        clientApiRoundtripMs: bsb.number({ description: "Client API to CLI roundtrip duration" }),
-        cliOverheadMs: optional(bsb.number({ description: "CLI work outside origin read duration" })),
-        originMs: optional(bsb.number({ description: "Origin/read duration" }))
+        clientApiRoundtripMs: bsb.number({ description: "Client API to CLI header roundtrip duration" })
       }, "Proxy response"),
       "Proxy an HTTP request through a connected tunnel client",
-      60
+      310
     )
   },
   emitBroadcast: {},
@@ -168,7 +175,20 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       };
       if (!tunnel) return unavailable;
       if (tunnel.ws.readyState !== tunnel.ws.OPEN) return unavailable;
-      return this.proxyRequest(tunnel, input.method, input.path, input.headers, input.body ?? "", input.webStartedAt);
+      return this.proxyRequest(tunnel, input.publicServerId, input.publicRequestId, input.method, input.path, input.headers, input.body ?? "", input.webStartedAt);
+    });
+    await this.events.onEventSpecific("proxy.cancel", this.appId, obs, async (_handlerObs, input) => {
+      const tunnel = this.registry.get(input.hostname);
+      const pending = tunnel?.pending.get(input.requestId);
+      if (!tunnel || !pending) return;
+      this.clearPendingTimers(pending);
+      tunnel.pending.delete(input.requestId);
+      tunnel.ws.send(JSON.stringify({ type: "request.cancel", requestId: input.requestId }));
+      if (pending.started) {
+        pending.requestObs.end({ status: "cancelled" });
+      } else {
+        pending.reject(new Error("Public request cancelled."));
+      }
     });
     await this.events.onEventSpecific("proxy.metrics", this.appId, obs, async (_handlerObs, input) => {
       const tunnel = this.registry.get(input.hostname);
@@ -531,7 +551,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     });
   }
 
-  private async proxyRequest(tunnel: ActiveTunnel, method: string, path: string, headers: Record<string, string>, body: string, webStartedAt: number): Promise<{ requestId: string; ownerServerId: string; status: number; headers: Record<string, string>; body: string; webStartedAt: number; clientApiRoundtripMs: number; cliOverheadMs?: number; originMs?: number }> {
+  private async proxyRequest(tunnel: ActiveTunnel, publicServerId: string, publicRequestId: string, method: string, path: string, headers: Record<string, string>, body: string, webStartedAt: number): Promise<{ requestId: string; ownerServerId: string; status: number; headers: Record<string, string>; webStartedAt: number; clientApiRoundtripMs: number }> {
     const requestId = crypto.randomUUID();
     const clientApiSentAt = Date.now();
     const timeoutMs = tunnel.authenticated ? 5 * 60 * 1000 : 60 * 1000;
@@ -548,44 +568,22 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       subdomain: tunnel.subdomain
     });
 
-    const responsePromise = new Promise<{ requestId: string; ownerServerId: string; status: number; headers: Record<string, string>; body: string; webStartedAt: number; clientApiRoundtripMs: number; cliOverheadMs?: number; originMs?: number }>((resolve, reject) => {
+    const responsePromise = new Promise<{ requestId: string; ownerServerId: string; status: number; headers: Record<string, string>; webStartedAt: number; clientApiRoundtripMs: number }>((resolve, reject) => {
       const pending: PendingRequest = {
-        resolve: (response) => {
-          void response.arrayBuffer().then((arrayBuffer) => {
-            const responseHeaders: Record<string, string> = {};
-            response.headers.forEach((value, key) => {
-              responseHeaders[key] = value;
-            });
-            const output = {
-              requestId,
-              ownerServerId: this.appId,
-              status: response.status,
-              headers: responseHeaders,
-              body: Buffer.from(arrayBuffer).toString("base64"),
-              webStartedAt: pending.webStartedAt,
-              clientApiRoundtripMs: pending.clientApiRoundtripMs ?? Date.now() - pending.clientApiSentAt,
-              cliOverheadMs: pending.cliOverheadMs,
-              originMs: pending.originMs
-            };
-            requestObs.log.info("CLIENT PROXY complete {method} {path} -> {status}", {
-              method,
-              path,
-              status: response.status
-            });
-            requestObs.end({ "http.response.status_code": response.status });
-            resolve(output);
-          }).catch(reject);
-        },
+        resolve,
         reject: (error) => {
           requestObs.error(error);
-          requestObs.end({ "status": "failed" });
+          requestObs.end({ status: "failed" });
           reject(error);
         },
-        chunks: [],
+        publicServerId,
+        publicRequestId,
+        started: false,
+        delivery: Promise.resolve(),
+        requestObs,
         webStartedAt,
         clientApiSentAt,
         totalTimer: setTimeout(() => this.failPending(tunnel, requestId, pending, new Error("Local app timed out.")), timeoutMs),
-        firstByteTimer: setTimeout(() => this.failPending(tunnel, requestId, pending, new Error("Local app did not acknowledge request within 5s.")), 5 * 1000),
         idleTimeoutMs
       };
       tunnel.pending.set(requestId, pending);
@@ -630,37 +628,60 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     if (!pending) return;
 
     if (frame.type === "response.start") {
-      clearTimeout(pending.firstByteTimer);
-      this.resetIdleTimer(tunnel, frame.requestId, pending);
+      pending.started = true;
       pending.status = frame.status ?? 200;
-      pending.headers = frame.headers ?? {};
+      const headers = stripResponseHeaders(frame.headers ?? {});
+      if (headers["content-type"]?.toLowerCase().includes("text/event-stream")) clearTimeout(pending.totalTimer);
+      this.resetIdleTimer(tunnel, frame.requestId, pending);
+      pending.resolve({
+        requestId: frame.requestId,
+        ownerServerId: this.appId,
+        status: pending.status,
+        headers,
+        webStartedAt: pending.webStartedAt,
+        clientApiRoundtripMs: Date.now() - pending.clientApiSentAt
+      });
       return;
     }
 
     if (frame.type === "response.body" && frame.body) {
       this.resetIdleTimer(tunnel, frame.requestId, pending);
-      pending.chunks.push(frame.body);
+      this.queueDelivery(pending, () => this.web.proxyResponseBodySpecific(pending.publicServerId, tunnel.sessionObs, {
+        publicRequestId: pending.publicRequestId,
+        body: frame.body!
+      }));
       return;
     }
 
     if (frame.type === "response.end") {
-      pending.clientApiRoundtripMs = Date.now() - pending.clientApiSentAt;
-      pending.cliOverheadMs = frame.cliOverheadMs;
-      pending.originMs = frame.originMs;
       this.clearPendingTimers(pending);
       tunnel.pending.delete(frame.requestId);
-      const buffer = Buffer.concat(pending.chunks.map((chunk) => Buffer.from(chunk, "base64")));
-      try {
-        pending.resolve(buildProxyResponse(buffer, pending.status ?? 200, stripResponseHeaders(pending.headers ?? {})));
-      } catch (error) {
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
-      }
+      this.queueDelivery(pending, () => this.web.proxyResponseEndSpecific(pending.publicServerId, tunnel.sessionObs, {
+        publicRequestId: pending.publicRequestId,
+        requestId: frame.requestId!,
+        ownerServerId: this.appId,
+        status: pending.status ?? 200,
+        clientApiRoundtripMs: Date.now() - pending.clientApiSentAt,
+        cliOverheadMs: frame.cliOverheadMs,
+        originMs: frame.originMs
+      }));
+      pending.requestObs.log.info("CLIENT PROXY complete requestId={requestId} status={status}", {
+        requestId: frame.requestId,
+        status: pending.status ?? 200
+      });
+      pending.requestObs.end({ "http.response.status_code": pending.status ?? 200 });
       return;
     }
 
     if (frame.type === "error") {
       this.failPending(tunnel, frame.requestId, pending, new Error(frame.message ?? "Tunnel client error."));
     }
+  }
+
+  private queueDelivery(pending: PendingRequest, deliver: () => Promise<void>): void {
+    pending.delivery = pending.delivery.then(deliver).catch((error) => {
+      pending.requestObs.error(error instanceof Error ? error : new Error(String(error)));
+    });
   }
 
   private resetIdleTimer(tunnel: ActiveTunnel, requestId: string, pending: PendingRequest): void {
@@ -674,12 +695,23 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
     if (!tunnel.pending.has(requestId)) return;
     this.clearPendingTimers(pending);
     tunnel.pending.delete(requestId);
-    pending.reject(error);
+    if (tunnel.ws.readyState === tunnel.ws.OPEN) {
+      tunnel.ws.send(JSON.stringify({ type: "request.cancel", requestId }));
+    }
+    if (!pending.started) {
+      pending.reject(error);
+      return;
+    }
+    this.queueDelivery(pending, () => this.web.proxyResponseErrorSpecific(pending.publicServerId, tunnel.sessionObs, {
+      publicRequestId: pending.publicRequestId,
+      message: error.message
+    }));
+    pending.requestObs.error(error);
+    pending.requestObs.end({ status: "failed" });
   }
 
   private clearPendingTimers(pending: PendingRequest): void {
     clearTimeout(pending.totalTimer);
-    clearTimeout(pending.firstByteTimer);
     if (pending.idleTimer) clearTimeout(pending.idleTimer);
   }
 }
@@ -717,14 +749,6 @@ async function loadPluginPackageVersion(packageCwd: string): Promise<string> {
   } catch {
     return "0.0.0";
   }
-}
-
-// Response() throws on null-body statuses with a body, and on statuses outside 200-599.
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-
-export function buildProxyResponse(body: Buffer, status: number, headers: HeadersInit): Response {
-  const safeStatus = status >= 200 && status <= 599 ? status : 502;
-  return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : new Uint8Array(body), { status: safeStatus, headers });
 }
 
 function json(value: unknown, status = 200): Response {
@@ -797,12 +821,12 @@ function isPrivateIp(ip: string): boolean {
     || ip.startsWith("fe80:");
 }
 
-function stripResponseHeaders(headers: Record<string, string>): Headers {
-  const out = new Headers();
+function stripResponseHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase();
     if (key === "set-cookie" || key === "connection" || key === "transfer-encoding") continue;
-    out.set(name, value);
+    out[key] = value;
   }
   return out;
 }

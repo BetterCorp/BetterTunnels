@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildSubdomain, buildTunnelSubdomain, normalizeHostPart } from "../src/plugins/service-tunnels-client/ids.js";
 import { tunnelStatusAfterDisconnect } from "../src/plugins/service-tunnels-client/registry.js";
 import { TunnelCreateSchema } from "../src/plugins/service-tunnels-client/schemas.js";
-import { tunnelUnavailable, verificationFailureResponse } from "../src/plugins/service-tunnels-proxy/http.js";
+import { buildStreamingProxyResponse, tunnelUnavailable, verificationFailureResponse } from "../src/plugins/service-tunnels-proxy/http.js";
 import { normalizeIpRange } from "../src/auth.js";
 import { createVerificationFlow } from "../src/plugins/service-tunnels-proxy/verification.js";
 import { registry } from "../src/plugins/service-tunnels-admin/.bp-generated/registry.js";
@@ -62,6 +62,24 @@ test("negotiates unavailable tunnel responses", async () => {
   const text = tunnelUnavailable(new Headers({ accept: "text/plain" }));
   assert.equal(text.headers.get("content-type"), "text/plain; charset=utf-8");
   assert.match(await text.text(), /not available right now/);
+});
+
+test("streams proxy response chunks before completion", async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value;
+    }
+  });
+  const response = buildStreamingProxyResponse(stream, 200, { "content-type": "text/event-stream" });
+  const reader = response.body!.getReader();
+  controller.enqueue(new TextEncoder().encode("data: one\n\n"));
+
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  assert.equal(new TextDecoder().decode(first.value), "data: one\n\n");
+  controller.close();
+  assert.equal((await reader.read()).done, true);
 });
 
 test("gates Turnstile submission and accepts recorded IP validation", async () => {

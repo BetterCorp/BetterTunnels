@@ -2,7 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
 import { connect as netConnect } from "node:net";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -93,6 +93,7 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
     const ws = new WebSocket(url);
     const originSockets = new Map<string, WebSocket>();
     const requests = new Map<string, { method: string; path: string; status: number; originMs: number }>();
+    const originRequests = new Map<string, AbortController>();
     let alive = true;
     let reconnect = true;
     const heartbeat = setInterval(() => {
@@ -120,6 +121,8 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
       clearInterval(heartbeat);
       for (const origin of originSockets.values()) origin.close();
       originSockets.clear();
+      for (const request of originRequests.values()) request.abort();
+      originRequests.clear();
       console.warn(`Tunnel server connection lost for ${config.host}:${config.port} (server-side, your local service is fine): code=${code} reason=${reason.toString() || "none"}`);
       if (!reconnect || code === 1002 || code === 1008) return;
       const delay = retryDelay(++attempt);
@@ -201,6 +204,10 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
         return;
       }
 
+      if (frame.type === "request.cancel" && frame.requestId) {
+        originRequests.get(frame.requestId)?.abort();
+        return;
+      }
       if (frame.type !== "request.start" || !frame.requestId) return;
 
       const request = JSON.parse(raw.toString()) as {
@@ -211,43 +218,56 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
         body?: string;
         webStartedAt?: number;
       };
+      const controller = new AbortController();
+      originRequests.set(request.requestId, controller);
 
       try {
         const cliStartedAt = Date.now();
         const headers = { ...request.headers };
         if (config.host_header) headers.host = config.host_header;
-        const response = await localRequest(config.host, config.port, request.method, request.path, headers, request.body);
+        const response = await localRequest(
+          config.host,
+          config.port,
+          request.method,
+          request.path,
+          headers,
+          request.body,
+          controller.signal,
+          async (status, responseHeaders) => sendFrame(ws, {
+            type: "response.start",
+            requestId: request.requestId,
+            status,
+            headers: responseHeaders
+          }),
+          async (body) => sendFrame(ws, {
+            type: "response.body",
+            requestId: request.requestId,
+            body
+          })
+        );
         const cliOverheadMs = Math.max(0, Date.now() - cliStartedAt - response.originMs);
-
-        ws.send(JSON.stringify({
-          type: "response.start",
-          requestId: request.requestId,
-          status: response.status,
-          headers: response.headers
-        }));
-        ws.send(JSON.stringify({
-          type: "response.body",
-          requestId: request.requestId,
-          body: response.body
-        }));
-        ws.send(JSON.stringify({
-          type: "response.end",
-          requestId: request.requestId,
-          cliOverheadMs,
-          originMs: response.originMs
-        }));
         requests.set(request.requestId, {
           method: request.method,
           path: request.path,
           status: response.status,
           originMs: response.originMs
         });
-      } catch (error) {
-        ws.send(JSON.stringify({
-          type: "error",
+        await sendFrame(ws, {
+          type: "response.end",
           requestId: request.requestId,
-          message: error instanceof Error ? error.message : String(error)
-        }));
+          cliOverheadMs,
+          originMs: response.originMs
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          await sendFrame(ws, {
+            type: "error",
+            requestId: request.requestId,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      } finally {
+        originRequests.delete(request.requestId);
       }
     });
   };
@@ -256,32 +276,43 @@ async function startTunnel(config: { host: string; port: number; prefix?: string
   await new Promise(() => undefined);
 }
 
-function localRequest(host: string, port: number, method: string, path: string, headers: Record<string, string>, body?: string): Promise<{ status: number; headers: Record<string, string>; body: string; originMs: number }> {
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const req = httpRequest({ host, port, method, path, headers }, (res) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      res.on("end", () => {
-        const responseHeaders: Record<string, string> = {};
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (Array.isArray(value)) responseHeaders[key] = value.join(", ");
-          else if (value !== undefined) responseHeaders[key] = value;
-        }
-        resolve({
-          status: res.statusCode ?? 502,
-          headers: responseHeaders,
-          body: Buffer.concat(chunks).toString("base64"),
-          originMs: Date.now() - startedAt
-        });
-      });
-    });
+async function localRequest(
+  host: string,
+  port: number,
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  signal: AbortSignal,
+  onStart: (status: number, headers: Record<string, string>) => Promise<void>,
+  onBody: (body: string) => Promise<void>
+): Promise<{ status: number; originMs: number }> {
+  const startedAt = Date.now();
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    const req = httpRequest({ host, port, method, path, headers, signal }, resolve);
     req.on("error", reject);
     if (body) req.write(Buffer.from(body, "base64"));
     req.end();
   });
+  const responseHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(response.headers)) {
+    if (Array.isArray(value)) responseHeaders[key] = value.join(", ");
+    else if (value !== undefined) responseHeaders[key] = value;
+  }
+  const status = response.statusCode ?? 502;
+  await onStart(status, responseHeaders);
+  for await (const value of response) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    if (chunk.byteLength) await onBody(chunk.toString("base64"));
+  }
+  return { status, originMs: Date.now() - startedAt };
 }
 
+function sendFrame(ws: WebSocket, value: unknown): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ws.send(JSON.stringify(value), (error) => error ? reject(error) : resolve());
+  });
+}
 function entryLabel(t: TunnelEntry, i: number): string {
   if (t.name) return t.name;
   if (t.dir) return t.dir;

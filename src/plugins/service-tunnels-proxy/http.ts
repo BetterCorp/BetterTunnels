@@ -58,6 +58,11 @@ export function buildProxyResponse(body: Buffer, status: number, headers: Header
   return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : new Uint8Array(body), { status: safeStatus, headers });
 }
 
+export function buildStreamingProxyResponse(body: ReadableStream<Uint8Array>, status: number, headers: HeadersInit): Response {
+  const safeStatus = status >= 200 && status <= 599 ? status : 502;
+  return new Response(NULL_BODY_STATUSES.has(safeStatus) ? null : body, { status: safeStatus, headers });
+}
+
 export function verificationFailureResponse(method: string, response: Response): Response {
   const headers = {
     "access-control-allow-origin": "*",

@@ -1,0 +1,75 @@
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"testing"
+	"time"
+)
+
+func TestLocalRequestStreamsBeforeOriginCompletes(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("data: one\n\n"))
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = w.Write([]byte("data: two\n\n"))
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portValue, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunks := make(chan string, 2)
+	done := make(chan error, 1)
+	go func() {
+		_, _, requestErr := localRequest(context.Background(), host, port, "GET", "/", nil, "",
+			func(status int, headers map[string]string) error {
+				if status != http.StatusOK || headers["Content-Type"] != "text/event-stream" {
+					return fmt.Errorf("unexpected response start: status=%d headers=%v", status, headers)
+				}
+				return nil
+			},
+			func(body string) error {
+				raw, decodeErr := base64.StdEncoding.DecodeString(body)
+				if decodeErr == nil {
+					chunks <- string(raw)
+				}
+				return decodeErr
+			},
+		)
+		done <- requestErr
+	}()
+
+	select {
+	case chunk := <-chunks:
+		if chunk != "data: one\n\n" {
+			close(release)
+			t.Fatalf("unexpected first chunk %q", chunk)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("first SSE chunk was buffered until response completion")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

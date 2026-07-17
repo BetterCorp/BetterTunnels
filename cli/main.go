@@ -400,9 +400,18 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 	writer := &wsWriter{conn: conn}
 	originSockets := map[string]*websocket.Conn{}
 	requests := map[string]requestLog{}
+	requestCancels := map[string]context.CancelFunc{}
 	var originMu sync.Mutex
 	var requestsMu sync.Mutex
+	var requestCancelsMu sync.Mutex
 	closed := make(chan struct{})
+	defer func() {
+		requestCancelsMu.Lock()
+		defer requestCancelsMu.Unlock()
+		for _, cancel := range requestCancels {
+			cancel()
+		}
+	}()
 
 	fmt.Printf("Connected: %s\n", serverURL)
 
@@ -476,8 +485,23 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			fmt.Printf("%s total=%s tunnel=%s origin=%s cli=%s server=%s\n", label, fmtMs(f.TotalMs), fmtMs(f.ClientAPIRoundtripMs), fmtMs(f.OriginMs), fmtMs(f.CLIOverheadMs), fmtMs(f.InternalServerMs))
 		case f.Type == "ws.toOrigin" && f.PublicServerID != "" && f.PublicSocketID != "" && f.FrameType != "":
 			handleOriginWS(ctx, writer, &originMu, originSockets, config, f)
+		case f.Type == "request.cancel" && f.RequestID != "":
+			requestCancelsMu.Lock()
+			cancel := requestCancels[f.RequestID]
+			requestCancelsMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
 		case f.Type == "request.start" && f.RequestID != "":
-			go handleRequest(ctx, writer, &requestsMu, requests, config, f)
+			requestCtx, cancel := context.WithCancel(ctx)
+			requestCancelsMu.Lock()
+			requestCancels[f.RequestID] = cancel
+			requestCancelsMu.Unlock()
+			go func(request frame) {
+				defer cancel()
+				defer func() { requestCancelsMu.Lock(); delete(requestCancels, request.RequestID); requestCancelsMu.Unlock() }()
+				handleRequest(requestCtx, writer, &requestsMu, requests, config, request)
+			}(f)
 		}
 	}
 }
@@ -491,31 +515,31 @@ func handleRequest(ctx context.Context, writer *wsWriter, mu *sync.Mutex, reques
 	if config.HostHeader != "" {
 		headers["host"] = config.HostHeader
 	}
-	resp, err := localRequest(config.Host, config.Port, f.Method, f.Path, headers, f.Body)
+	status, originMs, err := localRequest(ctx, config.Host, config.Port, f.Method, f.Path, headers, f.Body,
+		func(status int, headers map[string]string) error {
+			return writer.send(ctx, frame{Type: "response.start", RequestID: f.RequestID, Status: status, Headers: headers})
+		},
+		func(body string) error {
+			return writer.send(ctx, frame{Type: "response.body", RequestID: f.RequestID, Body: body})
+		},
+	)
 	if err != nil {
-		_ = writer.send(ctx, frame{Type: "error", RequestID: f.RequestID, Message: err.Error()})
+		if ctx.Err() == nil {
+			_ = writer.send(ctx, frame{Type: "error", RequestID: f.RequestID, Message: err.Error()})
+		}
 		return
 	}
-	cliOverhead := float64(time.Since(started).Milliseconds()) - resp.originMs
+	cliOverhead := float64(time.Since(started).Milliseconds()) - originMs
 	if cliOverhead < 0 {
 		cliOverhead = 0
 	}
-	_ = writer.send(ctx, frame{Type: "response.start", RequestID: f.RequestID, Status: resp.status, Headers: resp.headers})
-	_ = writer.send(ctx, frame{Type: "response.body", RequestID: f.RequestID, Body: resp.body})
-	_ = writer.send(ctx, frame{Type: "response.end", RequestID: f.RequestID, CLIOverheadMs: &cliOverhead, OriginMs: &resp.originMs})
 	mu.Lock()
-	requests[f.RequestID] = requestLog{method: f.Method, path: f.Path, status: resp.status}
+	requests[f.RequestID] = requestLog{method: f.Method, path: f.Path, status: status}
 	mu.Unlock()
+	_ = writer.send(ctx, frame{Type: "response.end", RequestID: f.RequestID, CLIOverheadMs: &cliOverhead, OriginMs: &originMs})
 }
 
-type localResponse struct {
-	status   int
-	headers  map[string]string
-	body     string
-	originMs float64
-}
-
-func localRequest(host string, port int, method, path string, headers map[string]string, body string) (localResponse, error) {
+func localRequest(ctx context.Context, host string, port int, method, path string, headers map[string]string, body string, onStart func(int, map[string]string) error, onBody func(string) error) (int, float64, error) {
 	started := time.Now()
 	if method == "" {
 		method = "GET"
@@ -524,13 +548,13 @@ func localRequest(host string, port int, method, path string, headers map[string
 	if body != "" {
 		raw, err := base64.StdEncoding.DecodeString(body)
 		if err != nil {
-			return localResponse{}, err
+			return 0, 0, err
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, fmt.Sprintf("http://%s:%d%s", host, port, path), reader)
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://%s:%d%s", host, port, path), reader)
 	if err != nil {
-		return localResponse{}, err
+		return 0, 0, err
 	}
 	for k, v := range headers {
 		if strings.EqualFold(k, "host") {
@@ -541,25 +565,33 @@ func localRequest(host string, port int, method, path string, headers map[string
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return localResponse{}, err
+		return 0, 0, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return localResponse{}, err
-	}
 	outHeaders := map[string]string{}
 	for k, v := range resp.Header {
 		outHeaders[k] = strings.Join(v, ", ")
 	}
-	return localResponse{
-		status:   resp.StatusCode,
-		headers:  outHeaders,
-		body:     base64.StdEncoding.EncodeToString(raw),
-		originMs: float64(time.Since(started).Milliseconds()),
-	}, nil
+	if err := onStart(resp.StatusCode, outHeaders); err != nil {
+		return 0, 0, err
+	}
+	buffer := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buffer)
+		if n > 0 {
+			if err := onBody(base64.StdEncoding.EncodeToString(buffer[:n])); err != nil {
+				return 0, 0, err
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return 0, 0, readErr
+		}
+	}
+	return resp.StatusCode, float64(time.Since(started).Milliseconds()), nil
 }
-
 func handleOriginWS(ctx context.Context, writer *wsWriter, mu *sync.Mutex, sockets map[string]*websocket.Conn, config tunnelConfig, f frame) {
 	socketID := f.PublicSocketID
 	if f.FrameType == "event" && f.Message == "open" {

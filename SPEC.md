@@ -80,11 +80,11 @@ Client side:
 - One websocket per active tunnel for MVP.
 - A CLI process may open multiple tunnel websockets from one `.bettertunnel` config.
 - Requests are multiplexed over the tunnel websocket using request IDs.
-- Each proxied request carries method, path, query, headers, body stream, and response stream.
+- Each proxied request carries method, path, query, headers, a bounded body, and a response stream.
 - Client sends heartbeat every 30 seconds.
 - Two missed heartbeats force disconnect and session cleanup.
-- Request bodies stream immediately.
-- If the server does not receive a client ACK for `request.start` within 5 seconds, return `502`.
+- Request bodies are buffered up to the configured request-body limit; response headers and body chunks stream immediately.
+- The total request timeout applies while waiting for response headers; SSE drops that total cap after headers and remains subject to the idle timeout.
 - If the client disconnects mid-request, return `502`.
 - Idle data timeout: 30 seconds for anonymous tunnels, 60 seconds for authenticated tunnels.
 - Total request timeout: 60 seconds for anonymous tunnels, 5 minutes for authenticated tunnels.
@@ -99,6 +99,7 @@ tunnel.close
 request.start
 request.body
 request.end
+request.cancel
 response.start
 response.body
 response.end

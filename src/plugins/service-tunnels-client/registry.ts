@@ -15,18 +15,24 @@ export interface ActiveTunnel {
 }
 
 export interface PendingRequest {
-  resolve: (response: Response) => void;
+  resolve: (response: {
+    requestId: string;
+    ownerServerId: string;
+    status: number;
+    headers: Record<string, string>;
+    webStartedAt: number;
+    clientApiRoundtripMs: number;
+  }) => void;
   reject: (error: Error) => void;
-  chunks: string[];
+  publicServerId: string;
+  publicRequestId: string;
+  started: boolean;
+  delivery: Promise<void>;
+  requestObs: Observable;
   status?: number;
-  headers?: Record<string, string>;
   webStartedAt: number;
   clientApiSentAt: number;
-  clientApiRoundtripMs?: number;
-  cliOverheadMs?: number;
-  originMs?: number;
   totalTimer: NodeJS.Timeout;
-  firstByteTimer: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
   idleTimeoutMs: number;
 }

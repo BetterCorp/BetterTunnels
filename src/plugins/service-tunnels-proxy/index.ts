@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { H3, getRequestURL, toNodeHandler } from "h3";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import TunnelClientApiClient from "../../.bsb/clients/service-tunnels-client.js";
-import { buildProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable, verificationFailureResponse } from "./http.js";
+import { buildProxyResponse, buildStreamingProxyResponse, forwardedHeaders, proxyClientIp, tunnelUnavailable, verificationFailureResponse } from "./http.js";
 import { createVerificationFlow, hash, type VerificationFlow } from "./verification.js";
 import { prisma } from "../../prisma.js";
 import { initializePrisma } from "../../prisma.js";
@@ -51,6 +51,32 @@ export const EventSchemas = createEventSchemas({
         body: optional(bsb.string({ description: "Base64 websocket payload" }))
       }, "Origin websocket frame to public client"),
       "Relay an origin websocket frame to the public websocket"
+    ),
+    "proxy.response.body": createFireAndForgetEvent(
+      bsb.object({
+        publicRequestId: bsb.string({ description: "Web service local request id" }),
+        body: bsb.string({ description: "Base64 encoded response chunk" })
+      }, "Proxy response body chunk"),
+      "Stream an HTTP response chunk to the public client"
+    ),
+    "proxy.response.end": createFireAndForgetEvent(
+      bsb.object({
+        publicRequestId: bsb.string({ description: "Web service local request id" }),
+        requestId: bsb.string({ description: "Tunnel request id" }),
+        ownerServerId: bsb.string({ description: "Client API server id" }),
+        status: bsb.number({ description: "HTTP status" }),
+        clientApiRoundtripMs: bsb.number({ description: "Client API to CLI roundtrip duration" }),
+        cliOverheadMs: optional(bsb.number({ description: "CLI work outside origin duration" })),
+        originMs: optional(bsb.number({ description: "Origin response duration" }))
+      }, "Proxy response completion"),
+      "Complete a streamed HTTP response"
+    ),
+    "proxy.response.error": createFireAndForgetEvent(
+      bsb.object({
+        publicRequestId: bsb.string({ description: "Web service local request id" }),
+        message: bsb.string({ description: "Streaming error" })
+      }, "Proxy response error"),
+      "Fail a streamed HTTP response"
     )
   },
   emitReturnableEvents: {},
@@ -58,6 +84,20 @@ export const EventSchemas = createEventSchemas({
   emitBroadcast: {},
   onBroadcast: {}
 });
+
+interface PublicResponse {
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  hostname: string;
+  tunnelId?: string;
+  requestObs: Observable;
+  startedAt: number;
+  bytesIn: number;
+  bytesOut: number;
+  requestId?: string;
+  ownerServerId?: string;
+  status?: number;
+  settled: boolean;
+}
 
 export class Plugin extends BSBService<InstanceType<typeof Config>, typeof EventSchemas> {
   static Config = Config;
@@ -71,6 +111,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   private readonly server: Server;
   private readonly wss: WebSocketServer;
   private readonly publicSockets = new Map<string, WebSocket>();
+  private readonly publicResponses = new Map<string, PublicResponse>();
   private readonly verification: VerificationFlow;
 
   constructor(cfg: BSBServiceConstructor<InstanceType<typeof Config>, typeof EventSchemas>) {
@@ -98,6 +139,26 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         return;
       }
       if (input.frameType === "event" && input.event === "close") ws.close();
+    });
+    await this.events.onEventSpecific("proxy.response.body", this.appId, obs, async (_handlerObs, input) => {
+      const pending = this.publicResponses.get(input.publicRequestId);
+      if (!pending || pending.settled) return;
+      const chunk = Buffer.from(input.body, "base64");
+      pending.bytesOut += chunk.byteLength;
+      pending.controller.enqueue(chunk);
+    });
+    await this.events.onEventSpecific("proxy.response.end", this.appId, obs, async (_handlerObs, input) => {
+      const pending = this.publicResponses.get(input.publicRequestId);
+      if (!pending || pending.settled) return;
+      pending.controller.close();
+      this.finishPublicResponse(input.publicRequestId, input);
+    });
+    await this.events.onEventSpecific("proxy.response.error", this.appId, obs, async (_handlerObs, input) => {
+      const pending = this.publicResponses.get(input.publicRequestId);
+      if (!pending || pending.settled) return;
+      const error = new Error(input.message);
+      pending.controller.error(error);
+      this.finishPublicResponse(input.publicRequestId, undefined, error);
     });
 
     this.app.get("/health", () => new Response("ok\n", {
@@ -144,9 +205,11 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         "client.address": clientIp
       });
       const startedAt = Date.now();
-
+      const publicRequestId = randomUUID();
       let bytesIn = 0;
       let bytesOut = 0;
+      let usageDeferred = false;
+
       try {
         requestObs.log.info("WEB REQUEST start {method} {host}{path} clientIp={clientIp}", {
           method: event.req.method,
@@ -177,51 +240,96 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
           return new Response("Request body too large.\n", { status: 413 });
         }
 
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({
+          start(value) {
+            controller = value;
+          },
+          cancel: () => this.cancelPublicResponse(publicRequestId)
+        });
+        const pending: PublicResponse = {
+          controller,
+          hostname: url.hostname,
+          tunnelId: validation.tunnelId,
+          requestObs,
+          startedAt,
+          bytesIn,
+          bytesOut: 0,
+          settled: false
+        };
+        this.publicResponses.set(publicRequestId, pending);
+        usageDeferred = true;
+
         const response = await this.clientApi.proxyRequest(obs, {
+          publicServerId: this.appId,
+          publicRequestId,
           hostname: url.hostname,
           method: event.req.method,
           path: `${url.pathname}${url.search}`,
           headers: forwardedHeaders(event.req.headers, url.hostname),
           body: bodyBuffer ? bodyBuffer.toString("base64") : undefined,
           webStartedAt: startedAt
-        }, 60);
+        }, 310);
 
-        const durationMs = Date.now() - startedAt;
-        bytesOut = approximateResponseBytes(response.headers, response.body);
-        this.sendProxyMetrics(obs, url.hostname, response, durationMs);
-        requestObs.log.info("WEB REQUEST complete {method} {host}{path} -> {status} in {durationMs}ms", {
-          method: event.req.method,
-          host: url.hostname,
-          path: url.pathname,
-          status: response.status,
-          durationMs
-        });
-        requestObs.end({
-          "http.response.status_code": response.status,
-          "duration.ms": durationMs
-        });
+        pending.requestId = response.requestId;
+        pending.ownerServerId = response.ownerServerId;
+        pending.status = response.status;
+        pending.bytesOut += approximateRecordHeaderBytes(response.headers);
+
+        if (response.body !== undefined) {
+          pending.settled = true;
+          this.publicResponses.delete(publicRequestId);
+          pending.controller.close();
+          const body = Buffer.from(response.body, "base64");
+          bytesOut = pending.bytesOut + body.byteLength;
+          usageDeferred = false;
+          const durationMs = Date.now() - startedAt;
+          requestObs.log.info("WEB REQUEST complete {method} {host}{path} -> {status} in {durationMs}ms", {
+            method: event.req.method,
+            host: url.hostname,
+            path: url.pathname,
+            status: response.status,
+            durationMs
+          });
+          requestObs.end({ "http.response.status_code": response.status, "duration.ms": durationMs });
+          if (response.status === 502 || response.status === 503) return tunnelUnavailable(event.req.headers);
+          return buildProxyResponse(body, response.status, response.headers);
+        }
 
         if (response.status === 502 || response.status === 503) {
+          this.cancelPublicResponse(publicRequestId, true);
           return tunnelUnavailable(event.req.headers);
         }
 
-        return buildProxyResponse(Buffer.from(response.body, "base64"), response.status, response.headers);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        requestObs.error(error instanceof Error ? error : new Error(message), {
-          "http.response.status_code": 502
-        });
-        requestObs.log.error("WEB REQUEST failed {method} {host}{path}: {message}", {
+        requestObs.log.info("WEB RESPONSE streaming {method} {host}{path} -> {status}", {
           method: event.req.method,
           host: url.hostname,
           path: url.pathname,
-          message
+          status: response.status
         });
-        requestObs.end({ "http.response.status_code": 503 });
+        return buildStreamingProxyResponse(stream, response.status, response.headers);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const pending = this.publicResponses.get(publicRequestId);
+        if (pending && !pending.settled) {
+          pending.controller.error(error);
+          this.finishPublicResponse(publicRequestId, undefined, error instanceof Error ? error : new Error(message));
+        } else {
+          requestObs.error(error instanceof Error ? error : new Error(message), {
+            "http.response.status_code": 502
+          });
+          requestObs.log.error("WEB REQUEST failed {method} {host}{path}: {message}", {
+            method: event.req.method,
+            host: url.hostname,
+            path: url.pathname,
+            message
+          });
+          requestObs.end({ "http.response.status_code": 503 });
+        }
         return tunnelUnavailable(event.req.headers);
       } finally {
         const tunnelId = validation.tunnelId;
-        if (tunnelId) {
+        if (tunnelId && !usageDeferred) {
           void recordUsage(tunnelId, bytesIn, bytesOut).catch((error) => {
             obs.log.warn("WEB REQUEST usage update failed tunnel={tunnelId}: {message}", {
               tunnelId,
@@ -243,11 +351,75 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
 
   async dispose(): Promise<void> {
     this.wss.close();
+    for (const publicRequestId of this.publicResponses.keys()) {
+      this.cancelPublicResponse(publicRequestId, true);
+    }
     await new Promise<void>((resolve, reject) => {
       this.server.close((error) => error ? reject(error) : resolve());
     });
   }
 
+  private finishPublicResponse(publicRequestId: string, completion?: {
+    requestId: string;
+    ownerServerId: string;
+    status: number;
+    clientApiRoundtripMs: number;
+    cliOverheadMs?: number;
+    originMs?: number;
+  }, error?: Error): void {
+    const pending = this.publicResponses.get(publicRequestId);
+    if (!pending || pending.settled) return;
+    pending.settled = true;
+    this.publicResponses.delete(publicRequestId);
+    const durationMs = Date.now() - pending.startedAt;
+
+    if (error) {
+      pending.requestObs.error(error, { "http.response.status_code": pending.status ?? 502 });
+      pending.requestObs.log.error("WEB RESPONSE stream failed {host}: {message}", {
+        host: pending.hostname,
+        message: error.message
+      });
+      pending.requestObs.end({ status: "failed", "duration.ms": durationMs });
+    } else {
+      const status = completion?.status ?? pending.status ?? 200;
+      pending.requestObs.log.info("WEB REQUEST complete {host} -> {status} in {durationMs}ms", {
+        host: pending.hostname,
+        status,
+        durationMs
+      });
+      pending.requestObs.end({ "http.response.status_code": status, "duration.ms": durationMs });
+      if (completion) this.sendProxyMetrics(pending.requestObs, pending.hostname, completion, durationMs);
+    }
+
+    this.recordPublicUsage(pending);
+  }
+
+  private cancelPublicResponse(publicRequestId: string, closeStream = false): void {
+    const pending = this.publicResponses.get(publicRequestId);
+    if (!pending || pending.settled) return;
+    pending.settled = true;
+    this.publicResponses.delete(publicRequestId);
+    if (closeStream) pending.controller.close();
+    if (pending.ownerServerId && pending.requestId) {
+      void this.clientApi.proxyCancelSpecific(pending.ownerServerId, pending.requestObs, {
+        hostname: pending.hostname,
+        requestId: pending.requestId
+      });
+    }
+    pending.requestObs.end({ status: "cancelled", "duration.ms": Date.now() - pending.startedAt });
+    this.recordPublicUsage(pending);
+  }
+
+  private recordPublicUsage(pending: PublicResponse): void {
+    const tunnelId = pending.tunnelId;
+    if (!tunnelId) return;
+    void recordUsage(tunnelId, pending.bytesIn, pending.bytesOut).catch((error) => {
+      pending.requestObs.log.warn("WEB REQUEST usage update failed tunnel={tunnelId}: {message}", {
+        tunnelId,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
   private async handlePublicSocket(ws: WebSocket, url: URL, obs: Observable): Promise<void> {
     const publicSocketId = randomUUID();
     const subdomain = url.hostname.split(".")[0] ?? "";
@@ -294,7 +466,6 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   private sendProxyMetrics(obs: Observable, hostname: string, response: {
     requestId: string;
     ownerServerId: string;
-    webStartedAt: number;
     clientApiRoundtripMs: number;
     cliOverheadMs?: number;
     originMs?: number;
@@ -356,10 +527,10 @@ function approximateHeaderBytes(headers: Headers): number {
   return total;
 }
 
-function approximateResponseBytes(headers: Record<string, string>, body: string): number {
+function approximateRecordHeaderBytes(headers: Record<string, string>): number {
   return Object.entries(headers).reduce(
     (total, [name, value]) => total + Buffer.byteLength(name) + Buffer.byteLength(value) + 4,
-    Buffer.from(body, "base64").byteLength
+    0
   );
 }
 
