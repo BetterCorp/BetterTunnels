@@ -64,9 +64,23 @@ type fileConfig struct {
 }
 
 type upOptions struct {
-	prefix string
-	proc   bool
-	entry  int
+	prefix        string
+	proc          bool
+	entry         int
+	supervisor    string
+	supervisorKey string
+}
+
+type upWindowRegistration struct {
+	Key   string `json:"key"`
+	Entry int    `json:"entry"`
+	PID   int    `json:"pid"`
+}
+
+type managedUpWindow struct {
+	label string
+	pid   int
+	conn  net.Conn
 }
 
 type frame struct {
@@ -225,14 +239,7 @@ func run(args []string) error {
 			}
 		}
 		if opts.proc {
-			for _, i := range selected {
-				label := entryLabel(cfg.Tunnels[i], i)
-				fmt.Printf("[%s] opening in a new window\n", label)
-				if err := launchUpWindow(i); err != nil {
-					return fmt.Errorf("tunnel %s: %w", label, err)
-				}
-			}
-			return nil
+			return superviseUpWindows(cfg.Tunnels, selected)
 		}
 		var childMu sync.Mutex
 		var children []*exec.Cmd
@@ -245,6 +252,16 @@ func run(args []string) error {
 				killTree(c)
 			}
 			children = nil
+		}
+		if opts.supervisor != "" {
+			conn, err := connectUpSupervisor(opts)
+			if err != nil {
+				return err
+			}
+			go watchUpSupervisor(conn, func() {
+				killChildren()
+				os.Exit(0)
+			})
 		}
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt)
@@ -782,6 +799,10 @@ func parseUpOptions(args []string) (upOptions, error) {
 				return opts, fmt.Errorf("invalid --entry value %q", strings.TrimPrefix(arg, "--entry="))
 			}
 			opts.entry = entry
+		case strings.HasPrefix(arg, "--supervisor="):
+			opts.supervisor = strings.TrimPrefix(arg, "--supervisor=")
+		case strings.HasPrefix(arg, "--supervisor-key="):
+			opts.supervisorKey = strings.TrimPrefix(arg, "--supervisor-key=")
 		case strings.HasPrefix(arg, "-"):
 			return opts, fmt.Errorf("unknown up flag %s", arg)
 		case opts.prefix != "":
@@ -792,6 +813,9 @@ func parseUpOptions(args []string) (upOptions, error) {
 	}
 	if opts.entry >= 0 && (opts.prefix != "" || opts.proc) {
 		return opts, errors.New("--entry cannot be combined with a prefix or --proc")
+	}
+	if (opts.supervisor == "") != (opts.supervisorKey == "") || opts.supervisor != "" && opts.entry < 0 {
+		return opts, errors.New("supervisor options require each other and --entry")
 	}
 	return opts, nil
 }
@@ -821,25 +845,146 @@ func selectUpEntries(tunnels []tunnelConfig, opts upOptions) ([]int, error) {
 	return selected, nil
 }
 
-func launchUpWindow(index int) error {
+func superviseUpWindows(tunnels []tunnelConfig, selected []int) error {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return fmt.Errorf("start process supervisor: %w", err)
+	}
+	defer listener.Close()
+
+	key := uuid()
+	expected := make(map[int]bool, len(selected))
+	for _, index := range selected {
+		expected[index] = true
+		tunnel := tunnels[index]
+		label := entryLabel(tunnel, index)
+		fmt.Printf("[%s] opening window: %s\n", label, upEntryDescription(tunnel))
+		if err := launchUpWindow(index, listener.Addr().String(), key); err != nil {
+			return fmt.Errorf("tunnel %s: %w", label, err)
+		}
+	}
+
+	windows := make(map[int]managedUpWindow, len(selected))
+	exited := make(chan int, len(selected))
+	deadline := time.Now().Add(15 * time.Second)
+	_ = listener.SetDeadline(deadline)
+	for len(windows) < len(selected) {
+		conn, err := listener.Accept()
+		if err != nil {
+			closeUpWindows(windows)
+			return fmt.Errorf("wait for process windows: %w", err)
+		}
+		_ = conn.SetReadDeadline(deadline)
+		var registration upWindowRegistration
+		err = json.NewDecoder(conn).Decode(&registration)
+		_ = conn.SetReadDeadline(time.Time{})
+		if err != nil || registration.Key != key || registration.PID <= 0 || !expected[registration.Entry] || windows[registration.Entry].conn != nil {
+			_ = conn.Close()
+			continue
+		}
+		window := managedUpWindow{
+			label: entryLabel(tunnels[registration.Entry], registration.Entry),
+			pid:   registration.PID,
+			conn:  conn,
+		}
+		windows[registration.Entry] = window
+		fmt.Printf("[%s] window running (pid %d)\n", window.label, window.pid)
+		go func(index int, conn net.Conn) {
+			_, _ = io.Copy(io.Discard, conn)
+			exited <- index
+		}(registration.Entry, conn)
+	}
+	_ = listener.Close()
+
+	fmt.Printf("Managing %d service windows. Press Ctrl+C to stop all.\n", len(windows))
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+	for len(windows) > 0 {
+		select {
+		case <-sig:
+			fmt.Println("Stopping service windows...")
+			closeUpWindows(windows)
+			return nil
+		case index := <-exited:
+			if window, ok := windows[index]; ok {
+				_ = window.conn.Close()
+				delete(windows, index)
+				fmt.Printf("[%s] window closed (pid %d)\n", window.label, window.pid)
+			}
+		}
+	}
+	return nil
+}
+
+func connectUpSupervisor(opts upOptions) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", opts.supervisor, 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connect to process supervisor: %w", err)
+	}
+	registration := upWindowRegistration{
+		Key:   opts.supervisorKey,
+		Entry: opts.entry,
+		PID:   os.Getpid(),
+	}
+	if err := json.NewEncoder(conn).Encode(registration); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("register process window: %w", err)
+	}
+	return conn, nil
+}
+
+func watchUpSupervisor(conn net.Conn, stop func()) {
+	var command [1]byte
+	_, _ = conn.Read(command[:])
+	_ = conn.Close()
+	stop()
+}
+
+func closeUpWindows(windows map[int]managedUpWindow) {
+	for index, window := range windows {
+		_ = window.conn.Close()
+		delete(windows, index)
+	}
+}
+
+func upEntryDescription(tunnel tunnelConfig) string {
+	parts := make([]string, 0, 3)
+	if tunnel.Prefix != "" {
+		parts = append(parts, "prefix "+tunnel.Prefix)
+	}
+	if tunnel.Dir != "" {
+		parts = append(parts, "static "+tunnel.Dir)
+	} else {
+		parts = append(parts, net.JoinHostPort(withDefaults(tunnel).Host, strconv.Itoa(tunnel.Port)))
+	}
+	if tunnel.Run != "" {
+		parts = append(parts, "run: "+tunnel.Run)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func launchUpWindow(index int, supervisor, key string) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	entryArg := fmt.Sprintf("--entry=%d", index)
+	supervisorArg := "--supervisor=" + supervisor
+	keyArg := "--supervisor-key=" + key
 	switch runtime.GOOS {
 	case "windows":
-		return exec.Command("cmd", "/C", "start", "", executable, "up", entryArg).Run()
+		return exec.Command("cmd", "/C", "start", "", executable, "up", entryArg, supervisorArg, keyArg).Run()
 	case "darwin":
 		cwd, err := os.Getwd()
 		if err != nil {
 			return err
 		}
 		script := `on run argv
-set command to "cd " & quoted form of item 1 of argv & " && " & quoted form of item 2 of argv & " up " & item 3 of argv
+set command to "cd " & quoted form of item 1 of argv & " && " & quoted form of item 2 of argv & " up " & quoted form of item 3 of argv & " " & quoted form of item 4 of argv & " " & quoted form of item 5 of argv & "; exit"
 tell application "Terminal" to do script command
 end run`
-		return exec.Command("osascript", "-e", script, cwd, executable, entryArg).Run()
+		return exec.Command("osascript", "-e", script, cwd, executable, entryArg, supervisorArg, keyArg).Run()
 	default:
 		terminal := os.Getenv("TERMINAL")
 		if terminal == "" {
@@ -849,7 +994,7 @@ end run`
 		if err != nil {
 			return fmt.Errorf("--proc requires a terminal emulator: %w", err)
 		}
-		cmd := exec.Command(path, "-e", executable, "up", entryArg)
+		cmd := exec.Command(path, "-e", executable, "up", entryArg, supervisorArg, keyArg)
 		if err := cmd.Start(); err != nil {
 			return err
 		}
@@ -1037,7 +1182,7 @@ func help() {
 	fmt.Println("  `run`, `cwd`, `dir`, `health`, and `ready_timeout` configure `btunnel up` services.")
 	fmt.Println("  Readiness waits for `health` to return < 400, or for the configured TCP port to accept connections.")
 	fmt.Println("  `ready_timeout` is seconds per service (default 30); timeout stops all services and exits non-zero.")
-	fmt.Println("  `--proc` opens one terminal window per service and requires at least two selected tunnels.")
+	fmt.Println("  `--proc` opens 2+ service windows; this terminal supervises and closes them on exit.")
 	fmt.Println()
 	fmt.Println("Validation and URLs:")
 	fmt.Println("  Public URLs use the server's configured tunnel domain and generated prefix.")

@@ -117,3 +117,16 @@ func TestUpOptionsSelectPrefixAndProcesses(t *testing.T) {
 		t.Fatalf("selected %v, want [1]", selected)
 	}
 }
+
+func TestSupervisorCloseStopsChild(t *testing.T) {
+	parent, child := net.Pipe()
+	stopped := make(chan struct{})
+	go watchUpSupervisor(child, func() { close(stopped) })
+	_ = parent.Close()
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("child did not stop when its supervisor connection closed")
+	}
+}
