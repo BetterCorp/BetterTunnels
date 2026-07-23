@@ -22,6 +22,7 @@ import { initializePrisma } from "../../prisma.js";
 import {
   AUTH_SESSION_TTL_MS,
   DEVICE_TOKEN_TTL_MS,
+  TRUSTED_IP_TTL_MS,
   bearerToken,
   hashSecret,
   normalizeIpRange,
@@ -315,6 +316,9 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
 
       const deviceToken = `bt_${randomToken(32)}`;
       const tokenExpiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
+      const ipRangeHash = hashSecret(ipRange.cidr);
+      const trustedAt = new Date();
+      const trustedUntil = new Date(trustedAt.getTime() + TRUSTED_IP_TTL_MS);
       await prisma.$transaction([
         prisma.clientDeviceToken.create({
           data: {
@@ -322,10 +326,44 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
             bpUserSubject: session.bpUserSubject,
             tokenHash: hashSecret(deviceToken),
             name: "BetterTunnels CLI",
-            ipRangeHash: hashSecret(ipRange.cidr),
+            ipRangeHash,
             ipFamily: ipRange.family,
             userAgentHash: hashSecret(event.req.headers.get("user-agent") ?? ""),
             expiresAt: tokenExpiresAt
+          }
+        }),
+        prisma.clientTrustedIpRange.upsert({
+          where: {
+            tenantId_bpUserSubject_ipFamily_ipRangeHash: {
+              tenantId: session.tenantId,
+              bpUserSubject: session.bpUserSubject,
+              ipFamily: ipRange.family,
+              ipRangeHash
+            }
+          },
+          create: {
+            tenantId: session.tenantId,
+            bpUserSubject: session.bpUserSubject,
+            ipFamily: ipRange.family,
+            ipRangeHash,
+            lastSeenAt: trustedAt,
+            expiresAt: trustedUntil
+          },
+          update: {
+            lastSeenAt: trustedAt,
+            expiresAt: trustedUntil
+          }
+        }),
+        prisma.auditEvent.create({
+          data: {
+            event: "cli.auth.ip_trusted",
+            subjectId: session.bpUserSubject,
+            data: {
+              tenantId: session.tenantId,
+              ipFamily: ipRange.family,
+              ipRangeHash,
+              expiresAt: trustedUntil.toISOString()
+            }
           }
         }),
         prisma.clientAuthSession.update({
@@ -454,7 +492,11 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
         ipHash: hashValue(clientIp),
         expiresAt
       },
-      update: { expiresAt }
+      update: {
+        ipHash: hashValue(clientIp),
+        userAgent: Array.isArray(userAgent) ? userAgent.join(" ") : userAgent,
+        expiresAt
+      }
     });
 
     const tunnelRow = await prisma.tunnel.upsert({
@@ -773,13 +815,51 @@ async function validateDeviceToken(token: string | undefined, clientIp: string, 
     where: { tokenHash: hashSecret(token) }
   });
   if (!row || row.revokedAt || row.expiresAt <= new Date()) return undefined;
-  if (row.ipFamily !== ipRange.family || row.ipRangeHash !== hashSecret(ipRange.cidr)) return undefined;
   if (row.userAgentHash && row.userAgentHash !== hashSecret(userAgent)) return undefined;
 
-  await prisma.clientDeviceToken.update({
-    where: { id: row.id },
-    data: { lastUsedAt: new Date() }
+  const now = new Date();
+  const ipRangeHash = hashSecret(ipRange.cidr);
+  const tokenRangeMatches = row.ipFamily === ipRange.family && row.ipRangeHash === ipRangeHash;
+  const trustedRange = tokenRangeMatches || !!await prisma.clientTrustedIpRange.findFirst({
+    where: {
+      tenantId: row.tenantId,
+      bpUserSubject: row.bpUserSubject,
+      ipFamily: ipRange.family,
+      ipRangeHash,
+      expiresAt: { gt: now }
+    },
+    select: { id: true }
   });
+  if (!trustedRange) return undefined;
+
+  await prisma.$transaction([
+    prisma.clientDeviceToken.update({
+      where: { id: row.id },
+      data: { lastUsedAt: now }
+    }),
+    prisma.clientTrustedIpRange.upsert({
+      where: {
+        tenantId_bpUserSubject_ipFamily_ipRangeHash: {
+          tenantId: row.tenantId,
+          bpUserSubject: row.bpUserSubject,
+          ipFamily: ipRange.family,
+          ipRangeHash
+        }
+      },
+      create: {
+        tenantId: row.tenantId,
+        bpUserSubject: row.bpUserSubject,
+        ipFamily: ipRange.family,
+        ipRangeHash,
+        lastSeenAt: now,
+        expiresAt: new Date(now.getTime() + TRUSTED_IP_TTL_MS)
+      },
+      update: {
+        lastSeenAt: now,
+        expiresAt: new Date(now.getTime() + TRUSTED_IP_TTL_MS)
+      }
+    })
+  ]);
   return {
     accountId: row.accountId ?? undefined,
     tenantId: row.tenantId,

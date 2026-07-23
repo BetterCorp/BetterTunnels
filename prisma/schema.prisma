@@ -118,6 +118,20 @@ model ClientDeviceToken {
   @@index([expiresAt])
 }
 
+model ClientTrustedIpRange {
+  id            String   @id @default(cuid())
+  tenantId      String
+  bpUserSubject String
+  ipRangeHash   String
+  ipFamily      String
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  expiresAt     DateTime
+
+  @@unique([tenantId, bpUserSubject, ipFamily, ipRangeHash])
+  @@index([expiresAt])
+}
+
 enum TunnelStatus {
   created
   active

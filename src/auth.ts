@@ -4,6 +4,8 @@ import net from "node:net";
 export const AUTH_SESSION_TTL_MS = 10 * 60 * 1000;
 export const DEVICE_TOKEN_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
+export const TRUSTED_IP_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
 }

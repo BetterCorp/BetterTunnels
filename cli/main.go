@@ -34,7 +34,9 @@ const defaultServer = "wss://connect.tunnels.betterportal.dev"
 const githubRepo = "BetterCorp/BetterTunnels"
 
 var sessionID = uuid()
+var authMu sync.Mutex
 var version = "dev"
+var errAuthenticationRequired = errors.New("authentication required")
 
 type cliState struct {
 	Token     string `json:"token,omitempty"`
@@ -200,7 +202,7 @@ func run(args []string) error {
 			cfg.Validation = validation
 			rest = rest[consumed:]
 		}
-		return startTunnel(cfg)
+		return startPreparedTunnel(cfg)
 	case "up":
 		opts, err := parseUpOptions(args[1:])
 		if err != nil {
@@ -237,6 +239,13 @@ func run(args []string) error {
 			if t.Cwd != "" && t.Run == "" {
 				return fmt.Errorf("tunnel %s: cwd requires run", label)
 			}
+		}
+		authConfigs := make([]tunnelConfig, 0, len(selected))
+		for _, i := range selected {
+			authConfigs = append(authConfigs, cfg.Tunnels[i])
+		}
+		if err := prepareTunnelAuth(authConfigs); err != nil {
+			return err
 		}
 		if opts.proc {
 			return superviseUpWindows(cfg.Tunnels, selected)
@@ -348,7 +357,7 @@ func run(args []string) error {
 				_ = cmd.Wait()
 				os.Exit(0)
 			}()
-			return startTunnel(tunnelConfig{Host: "127.0.0.1", Port: port})
+			return startPreparedTunnel(tunnelConfig{Host: "127.0.0.1", Port: port})
 		}
 		port := 0
 		dir := ""
@@ -377,11 +386,70 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return startTunnel(tunnelConfig{Host: "127.0.0.1", Port: actualPort})
+		return startPreparedTunnel(tunnelConfig{Host: "127.0.0.1", Port: actualPort})
 	default:
 		usage()
 		return nil
 	}
+}
+
+func startPreparedTunnel(config tunnelConfig) error {
+	if err := prepareTunnelAuth([]tunnelConfig{config}); err != nil {
+		return err
+	}
+	return startTunnel(config)
+}
+
+func prepareTunnelAuth(configs []tunnelConfig) error {
+	state, err := loadState()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	authRequired := state.Token != ""
+	for _, config := range configs {
+		if config.Prefix != "" || config.Validation == "ip" {
+			authRequired = true
+			break
+		}
+	}
+	if !authRequired {
+		return nil
+	}
+
+	if state.Token != "" {
+		if _, err := fetchServiceStatus(clientHTTPBase(), state.Token); err == nil {
+			return nil
+		} else if !errors.Is(err, errAuthenticationRequired) {
+			return fmt.Errorf("check authentication: %w", err)
+		}
+	}
+	return reauthenticate(state.Token)
+}
+
+func reauthenticate(rejectedToken string) error {
+	authMu.Lock()
+	defer authMu.Unlock()
+
+	state, err := loadState()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if state.Token != "" && state.Token != rejectedToken {
+		if _, err := fetchServiceStatus(clientHTTPBase(), state.Token); err == nil {
+			return nil
+		}
+	}
+
+	if rejectedToken == "" {
+		fmt.Println("Authentication is required for this tunnel; starting login...")
+	} else {
+		fmt.Println("Authentication needs to be refreshed; starting login...")
+	}
+	if err := login(); err != nil {
+		return fmt.Errorf("authenticate tunnel: %w", err)
+	}
+	return nil
 }
 
 func startTunnel(config tunnelConfig) error {
@@ -406,21 +474,38 @@ func startTunnel(config tunnelConfig) error {
 	if config.Prefix != "" {
 		q.Set("prefix", config.Prefix)
 	}
-	state, _ := loadState()
-	if state.Token != "" {
-		q.Set("authenticated", "true")
-		q.Set("token", state.Token)
-	}
 	u.RawQuery = q.Encode()
 
 	attempt := 0
+	authAttempted := false
 	for {
-		code, retry, ready := connectTunnel(context.Background(), u.String(), serverURL, config)
+		state, _ := loadState()
+		q = u.Query()
+		q.Del("authenticated")
+		q.Del("token")
+		if state.Token != "" {
+			q.Set("authenticated", "true")
+			q.Set("token", state.Token)
+		}
+		u.RawQuery = q.Encode()
+
+		code, reason, retry, ready := connectTunnel(context.Background(), u.String(), serverURL, config)
+		if shouldReauthenticate(code, reason) {
+			if authAttempted && !ready {
+				return errors.New("authentication was rejected after re-authentication")
+			}
+			if err := reauthenticate(state.Token); err != nil {
+				return err
+			}
+			authAttempted = true
+			continue
+		}
 		if !retry || code == int(websocket.StatusProtocolError) || code == int(websocket.StatusPolicyViolation) {
 			return nil
 		}
 		if ready {
 			attempt = 0
+			authAttempted = false
 		}
 		attempt++
 		delay := retryDelay(attempt)
@@ -429,13 +514,13 @@ func startTunnel(config tunnelConfig) error {
 	}
 }
 
-func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (code int, retry bool, ready bool) {
+func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelConfig) (code int, reason string, retry bool, ready bool) {
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"User-Agent": {clientUserAgent()}},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Tunnel server unreachable for %s:%d (server-side issue, your local service is fine): %v\n", config.Host, config.Port, err)
-		return 0, true, false
+		return 0, "", true, false
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
@@ -487,8 +572,13 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			}
 			originMu.Unlock()
 			code := int(websocket.CloseStatus(err))
-			fmt.Printf("Tunnel server connection lost for %s:%d (server-side, your local service is fine): code=%d reason=%s\n", config.Host, config.Port, code, closeReason(err))
-			return code, true, ready
+			reason := closeReason(err)
+			if shouldReauthenticate(code, reason) {
+				fmt.Printf("Tunnel authentication needs refresh for %s:%d.\n", config.Host, config.Port)
+			} else {
+				fmt.Printf("Tunnel server connection lost for %s:%d (server-side, your local service is fine): code=%d reason=%s\n", config.Host, config.Port, code, reason)
+			}
+			return code, reason, true, ready
 		}
 
 		var f frame
@@ -496,7 +586,7 @@ func connectTunnel(ctx context.Context, wsURL, serverURL string, config tunnelCo
 			fmt.Fprintf(os.Stderr, "Tunnel protocol error for %s:%d: %v\n", config.Host, config.Port, err)
 			_ = conn.Close(websocket.StatusProtocolError, "protocol error")
 			close(closed)
-			return int(websocket.StatusProtocolError), false, ready
+			return int(websocket.StatusProtocolError), "protocol error", false, ready
 		}
 
 		switch {
@@ -1139,6 +1229,10 @@ func closeReason(err error) string {
 	return err.Error()
 }
 
+func shouldReauthenticate(code int, reason string) bool {
+	return code == int(websocket.StatusPolicyViolation) && reason == "reauth required"
+}
+
 func usage() {
 	fmt.Println("usage: btunnel login")
 	fmt.Println("usage: btunnel logout")
@@ -1171,6 +1265,8 @@ func help() {
 	fmt.Println("  `login` stores a device token in the OS BetterTunnels config directory.")
 	fmt.Println("  The server validates the token on every authenticated tunnel connection")
 	fmt.Println("  for expiry, revocation, client IP range, and user-agent binding.")
+	fmt.Println("  Tunnel commands start browser login automatically when authentication needs refreshing.")
+	fmt.Println("  Re-auth trusts the hashed IPv4 /24 or IPv6 /64 range for one year since last use.")
 	fmt.Println("  `status` validates the saved token without displaying its secret value.")
 	fmt.Println("  Use `BETTER_TUNNELS_SERVER` to target a different API server.")
 	fmt.Println()
@@ -1313,6 +1409,9 @@ func fetchServiceStatus(base, token string) (serviceStatusResponse, error) {
 		return serviceStatusResponse{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return serviceStatusResponse{}, fmt.Errorf("%w: HTTP %s", errAuthenticationRequired, resp.Status)
+	}
 	if resp.StatusCode >= 300 {
 		return serviceStatusResponse{}, fmt.Errorf("HTTP %s", resp.Status)
 	}

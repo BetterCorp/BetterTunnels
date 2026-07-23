@@ -135,7 +135,7 @@ Unauthenticated tunnels:
 - Lower request rate limit.
 - Lower bandwidth/data transfer limit.
 - Random subdomain only.
-- Creator IP must pass Turnstile once before tunnel becomes public.
+- Creator IP bypasses visitor verification while the tunnel session is active.
 
 Registered tunnels:
 
@@ -503,6 +503,9 @@ Authenticated `.bettertunnel` behavior:
 - Higher limits and longer timeouts apply.
 - Account plan controls feature flags such as IP-based verification, verification bypass, custom prefixes, limits, and retention.
 - Paid/registered users can verify trusted public IPs for automation where browser cookies are not practical.
+- Successful CLI authentication trusts only a hashed IPv4 `/24` or IPv6 `/64` range for that tenant/user.
+- Trusted ranges expire one year after last use; an unknown range denies the token and requires re-authentication before it is linked.
+- Tunnel commands automatically enter the browser login flow when saved authentication is rejected.
 
 CLI self-hosting behavior:
 

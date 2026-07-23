@@ -173,7 +173,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       const userAgent = request.headers["user-agent"] ?? "";
       const userAgentValue = Array.isArray(userAgent) ? userAgent.join(" ") : userAgent;
       const validation = await visitorValidation(url.hostname, clientIp, userAgentValue);
-      const verificationResponse = await this.verification.enforce({ req: new Request(url, { headers }) } as never, url, clientIp, userAgentValue, validation.strategy, validation.ipValidated);
+      const verificationResponse = await this.verification.enforce({ req: new Request(url, { headers }) } as never, url, clientIp, userAgentValue, validation.strategy, validation.ipValidated, validation.creatorIp);
       if (this.verification.isVerificationHost(url.hostname) || verificationResponse) {
         socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
         socket.destroy();
@@ -195,7 +195,7 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
       }
 
       const validation = await visitorValidation(url.hostname, clientIp, userAgent);
-      const verificationResponse = await this.verification.enforce(event, url, clientIp, userAgent, validation.strategy, validation.ipValidated);
+      const verificationResponse = await this.verification.enforce(event, url, clientIp, userAgent, validation.strategy, validation.ipValidated, validation.creatorIp);
       if (verificationResponse) return verificationFailureResponse(event.req.method, verificationResponse);
 
       const requestObs = obs.startSpan("bt.web.request", {
@@ -483,12 +483,13 @@ export class Plugin extends BSBService<InstanceType<typeof Config>, typeof Event
   }
 }
 
-async function visitorValidation(hostname: string, clientIp: string, userAgent: string): Promise<{ tunnelId?: string; strategy?: string; ipValidated: boolean }> {
+async function visitorValidation(hostname: string, clientIp: string, userAgent: string): Promise<{ tunnelId?: string; strategy?: string; ipValidated: boolean; creatorIp: boolean }> {
   const tunnel = await prisma.tunnel.findUnique({
     where: { subdomain: hostname.split(".")[0] ?? "" },
     select: {
       validation: true,
       id: true,
+      session: { select: { ipHash: true } },
       validations: {
         where: {
           visitorIpHash: hash(clientIp),
@@ -500,7 +501,12 @@ async function visitorValidation(hostname: string, clientIp: string, userAgent: 
       }
     }
   });
-  return { tunnelId: tunnel?.id, strategy: tunnel?.validation, ipValidated: !!tunnel?.validations.length };
+  return {
+    tunnelId: tunnel?.id,
+    strategy: tunnel?.validation,
+    ipValidated: !!tunnel?.validations.length,
+    creatorIp: tunnel?.session.ipHash === hash(clientIp)
+  };
 }
 
 async function recordUsage(tunnelId: string, bytesIn: number, bytesOut: number): Promise<void> {

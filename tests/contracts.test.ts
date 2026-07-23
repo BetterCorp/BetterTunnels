@@ -115,6 +115,7 @@ test("gates Turnstile submission and accepts recorded IP validation", async () =
   assert.equal(page.headers.get("x-frame-options"), "DENY");
 
   const event = { req: new Request(target) } as never;
+  assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "cookie", false, true), undefined);
   assert.equal(await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", true), undefined);
 
   const redirect = await flow.enforce(event, target, "203.0.113.42", "Test Browser", "ip", false);

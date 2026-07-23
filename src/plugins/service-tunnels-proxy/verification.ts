@@ -66,7 +66,8 @@ export class VerificationFlow {
     return this.verificationPage(returnTo, embedded);
   }
 
-  async enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", ipValidated = false): Promise<Response | undefined> {
+  async enforce(event: H3Event, url: URL, clientIp: string, userAgent: string, validation: string = "cookie", ipValidated = false, creatorIp = false): Promise<Response | undefined> {
+    if (creatorIp) return undefined;
     if (this.validHostCookie(event.req.headers, url.hostname, clientIp, userAgent)) {
       if (validation === "ip" && !ipValidated) await this.recordIpValidation(url.toString(), clientIp, userAgent);
       return undefined;

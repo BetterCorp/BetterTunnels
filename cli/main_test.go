@@ -130,3 +130,12 @@ func TestSupervisorCloseStopsChild(t *testing.T) {
 		t.Fatal("child did not stop when its supervisor connection closed")
 	}
 }
+
+func TestReauthPolicyClose(t *testing.T) {
+	if !shouldReauthenticate(1008, "reauth required") {
+		t.Fatal("reauth policy close was not recognized")
+	}
+	if shouldReauthenticate(1008, "tunnel expired") {
+		t.Fatal("unrelated policy close triggered reauthentication")
+	}
+}
